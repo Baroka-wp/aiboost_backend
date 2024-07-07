@@ -263,7 +263,7 @@ CoursesRoutes.get('/:courseId/progress', authMiddleware, async (req, res) => {
     }
 
     if (!userProgress) {
-      return successResponse(res, { current_chapter_id: 1, completed_chapter: [] }, 'Default progress retrieved');
+      return successResponse(res, { current_chapter_id: 1, completed_chapters: [] }, 'Default progress retrieved');
     }
 
     successResponse(res, userProgress, 'User progress retrieved successfully');

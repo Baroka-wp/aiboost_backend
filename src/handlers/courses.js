@@ -102,7 +102,7 @@ CoursesRoutes.post('/enroll/:courseId', authMiddleware, async (req, res) => {
       throw updateError;
     }
 
-    successResponse(res, updatedUser , 'Enrollment successful');
+    successResponse(res, updatedUser, 'Enrollment successful');
   } catch (error) {
     errorResponse(res, 'Failed to enroll in the course', 500, error);
   }
@@ -166,62 +166,165 @@ CoursesRoutes.get('/:courseId/chapters/:chapterId', authMiddleware, async (req, 
 // Update user progress
 CoursesRoutes.post('/:courseId/progress', authMiddleware, async (req, res) => {
   const { chapterId } = req.body;
+  const userId = req.userId;
+  const courseId = parseInt(req.params.courseId);
+
+  // Commencer une transaction
+  const { data, error } = await supabase.rpc('update_user_progress', {
+    p_user_id: userId,
+    p_course_id: courseId,
+    p_chapter_id: chapterId
+  });
+
+  if (error) {
+    console.error('Error updating user progress:', error);
+    return errorResponse(res, 'Failed to update user progress', 500, error);
+  }
+
+  successResponse(res, data, 'User progress updated successfully');
+});
+
+// Validate chapter after successful QCM
+CoursesRoutes.post('/:courseId/validate-chapter', authMiddleware, async (req, res) => {
+  const { chapterId, score } = req.body;
+  const userId = req.userId;
+  const courseId = parseInt(req.params.courseId);
+
+  if (score < 80) {
+    return errorResponse(res, 'Score is below 80%, chapter not validated', 400);
+  }
 
   try {
-    const { data: user, error: userError } = await supabase
-      .from('users')
-      .select('progress')
-      .eq('id', req.userId)
+    // Récupérer la progression actuelle
+    let { data: userProgress, error: progressError } = await supabase
+      .from('user_progress')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('course_id', courseId)
       .single();
 
-    if (userError) throw userError;
+    if (progressError) throw progressError;
 
-    let progress = user.progress || {};
+    if (!userProgress) {
+      // Si aucune entrée n'existe, en créer une nouvelle
+      const { data: newProgress, error: insertError } = await supabase
+        .from('user_progress')
+        .insert({
+          user_id: userId,
+          course_id: courseId,
+          current_chapter_id: chapterId,
+          completed_chapters: [chapterId]
+        })
+        .single();
 
-    if (!progress[req.params.courseId]) {
-      progress[req.params.courseId] = {
-        completedChapters: [],
-        currentChapter: parseInt(chapterId)
-      };
+      if (insertError) throw insertError;
+      userProgress = newProgress;
+    } else {
+      const updatedCompletedChapters =
+        userProgress.completed_chapters.includes(chapterId)
+          ? userProgress.completed_chapters
+          : [...userProgress.completed_chapters, chapterId];
+
+      const { data: updatedProgress, error: updateError } = await supabase
+        .from('user_progress')
+        .update({
+          current_chapter_id: chapterId,
+          completed_chapters: updatedCompletedChapters
+        })
+        .eq('user_id', userId)
+        .eq('course_id', courseId)
+        .single();
+
+      if (updateError) throw updateError;
+      userProgress = updatedProgress;
     }
 
-    if (!progress[req.params.courseId].completedChapters.includes(parseInt(chapterId))) {
-      progress[req.params.courseId].completedChapters.push(parseInt(chapterId));
-      progress[req.params.courseId].currentChapter = parseInt(chapterId) + 1;
-    }
-
-    const { data, error } = await supabase
-      .from('users')
-      .update({ progress })
-      .eq('id', req.userId)
-      .single();
-
-    if (error) throw error;
-
-    successResponse(res, progress[req.params.courseId], 'User progress updated successfully');
+    successResponse(res, userProgress, 'Chapter validated and progress updated successfully');
   } catch (error) {
-    errorResponse(res, 'Failed to update user progress', 500, error);
+    errorResponse(res, 'Failed to validate chapter and update progress', 500, error);
   }
 });
 
 // Get user progress for a specific course
 CoursesRoutes.get('/:courseId/progress', authMiddleware, async (req, res) => {
+  const userId = req.userId;
+  const courseId = parseInt(req.params.courseId);
+
   try {
+    const { data: userProgress, error: progressError } = await supabase
+      .from('user_progress')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('course_id', courseId)
+      .single();
+
+    if (progressError && progressError.code !== 'PGRST116') {
+      throw progressError;
+    }
+
+    if (!userProgress) {
+      return successResponse(res, { current_chapter_id: 1, completed_chapter: [] }, 'Default progress retrieved');
+    }
+
+    successResponse(res, userProgress, 'User progress retrieved successfully');
+  } catch (error) {
+    errorResponse(res, 'Failed to retrieve user progress', 500, error);
+  }
+});
+
+// Get progress for all enrolled courses
+CoursesRoutes.get('/enrolled/progress/:userId', authMiddleware, async (req, res) => {
+  const userId = req.params.userId;
+
+  try {
+    // Récupérer les cours inscrits de l'utilisateur
     const { data: user, error: userError } = await supabase
       .from('users')
-      .select('progress')
-      .eq('id', req.userId)
+      .select('enrolled_courses')
+      .eq('id', userId)
       .single();
 
     if (userError) throw userError;
 
-    const progress = user.progress && user.progress[req.params.courseId]
-      ? user.progress[req.params.courseId]
-      : { completedChapters: [], currentChapter: 1 };
+    const enrolledCoursesIds = user.enrolled_courses || [];
 
-    successResponse(res, progress, 'User progress retrieved successfully');
+    if (enrolledCoursesIds.length === 0) {
+      return successResponse(res, [], 'User has no enrolled courses');
+    }
+
+    // Récupérer la progression pour tous les cours inscrits
+    const { data: progress, error: progressError } = await supabase
+      .from('user_progress')
+      .select('*')
+      .eq('user_id', userId)
+      .in('course_id', enrolledCoursesIds);
+
+    if (progressError) throw progressError;
+
+    // Récupérer le nombre total de chapitres pour chaque cours
+    const { data: courses, error: coursesError } = await supabase
+      .from('courses')
+      .select('id, chapters(count)')
+      .in('id', enrolledCoursesIds);
+
+    if (coursesError) throw coursesError;
+
+    // Calculer le pourcentage de progression pour chaque cours
+    const progressWithPercentage = progress.map(p => {
+      const course = courses.find(c => c.id === p.course_id);
+      const totalChapters = course.chapters[0].count;
+      const completedChapters = p.completed_chapters ? p.completed_chapters.length : 0;
+      const percentage = Math.round((completedChapters / totalChapters) * 100);
+      return {
+        ...p,
+        totalChapters,
+        percentage
+      };
+    });
+
+    successResponse(res, progressWithPercentage, 'Course progress retrieved successfully');
   } catch (error) {
-    errorResponse(res, 'Failed to retrieve user progress', 500, error);
+    errorResponse(res, 'Failed to retrieve course progress', 500, error);
   }
 });
 

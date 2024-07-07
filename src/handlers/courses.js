@@ -328,4 +328,61 @@ CoursesRoutes.get('/enrolled/progress/:userId', authMiddleware, async (req, res)
   }
 });
 
+
+// submik work link
+CoursesRoutes.post('/:courseId/chapters/:chapterId/submit-link', authMiddleware, async (req, res) => {
+  const { courseId, chapterId } = req.params;
+  const { link } = req.body;
+  const userId = req.userId;
+
+  try {
+    const { data, error } = await supabase
+      .from('submissions')
+      .insert({
+        user_id: userId,
+        course_id: courseId,
+        chapter_id: chapterId,
+        link: link,
+        status: 'pending'
+      })
+      .single();
+
+    if (error) throw error;
+
+    res.json({ success: true, submission: data });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+
+CoursesRoutes.get('/:courseId/chapters/:chapterId/submission-status', authMiddleware, async (req, res) => {
+  const { courseId, chapterId } = req.params;
+  const userId = req.userId;
+
+  try{
+    const { data, error } = await supabase
+      .from('submissions') 
+      .select('*')
+      .eq('user_id', userId)
+      .eq('course_id', courseId)
+      .eq('chapter_id', chapterId)
+      .single()
+
+      if(!data) {
+        return successResponse(res, {status: 'not_submitted'}, 'Course progress retrieved successfully');
+      }
+
+      if(error) throw error;
+
+      
+
+      successResponse(res, data, 'Course progress retrieved successfully');
+
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+})
+
+
 export default CoursesRoutes;

@@ -2,7 +2,7 @@ import express, { Router } from 'express';
 import { createClient } from '@supabase/supabase-js';
 import { config } from 'dotenv';
 import { successResponse, errorResponse } from '../utils/apiResponses.js';
-import { authMiddleware } from '../utils/utils.js';
+import { authMiddleware, AdminMiddleware, mentorAdminMiddleware } from '../utils/utils.js';
 
 config();
 
@@ -185,9 +185,8 @@ CoursesRoutes.post('/:courseId/progress', authMiddleware, async (req, res) => {
 });
 
 // Validate chapter after successful QCM
-CoursesRoutes.post('/:courseId/validate-chapter', authMiddleware, async (req, res) => {
-  const { chapterId, score } = req.body;
-  const userId = req.userId;
+CoursesRoutes.post('/:courseId/validate-chapter', authMiddleware, mentorAdminMiddleware, async (req, res) => {
+  const { chapterId, score, studentId } = req.body;
   const courseId = parseInt(req.params.courseId);
 
   if (score < 80) {
@@ -199,18 +198,16 @@ CoursesRoutes.post('/:courseId/validate-chapter', authMiddleware, async (req, re
     let { data: userProgress, error: progressError } = await supabase
       .from('user_progress')
       .select('*')
-      .eq('user_id', userId)
+      .eq('user_id', studentId)
       .eq('course_id', courseId)
       .single();
-
-    if (progressError) throw progressError;
 
     if (!userProgress) {
       // Si aucune entrée n'existe, en créer une nouvelle
       const { data: newProgress, error: insertError } = await supabase
         .from('user_progress')
         .insert({
-          user_id: userId,
+          user_id: studentId,
           course_id: courseId,
           current_chapter_id: chapterId,
           completed_chapters: [chapterId]
@@ -231,7 +228,7 @@ CoursesRoutes.post('/:courseId/validate-chapter', authMiddleware, async (req, re
           current_chapter_id: chapterId,
           completed_chapters: updatedCompletedChapters
         })
-        .eq('user_id', userId)
+        .eq('user_id', studentId)
         .eq('course_id', courseId)
         .single();
 
@@ -355,34 +352,73 @@ CoursesRoutes.post('/:courseId/chapters/:chapterId/submit-link', authMiddleware,
   }
 });
 
+// mettre à jour une soumission existante
+CoursesRoutes.put('/submissions/:submissionId', authMiddleware, async (req, res) => {
+  const { submissionId } = req.params;
+  const { link } = req.body;
+  const userId = req.userId;
+
+  try {
+    // Vérifier si la soumission existe et appartient à l'utilisateur
+    const { data: existingSubmission, error: fetchError } = await supabase
+      .from('submissions')
+      .select('*')
+      .eq('id', submissionId)
+      .eq('user_id', userId)
+      .single();
+
+    if (fetchError) {
+      return errorResponse(res, 'Submission not found or you do not have permission to update it', 404);
+    }
+
+    // Mettre à jour la soumission
+    const { data, error } = await supabase
+      .from('submissions')
+      .update({
+        link,
+        status: 'pending',
+        updated_at: new Date()
+      })
+      .eq('id', submissionId)
+      .single();
+
+    if (error) throw error;
+
+    successResponse(res, data, 'Submission updated successfully');
+  } catch (error) {
+    errorResponse(res, 'Failed to update submission', 500, error);
+  }
+});
+
 
 CoursesRoutes.get('/:courseId/chapters/:chapterId/submission-status', authMiddleware, async (req, res) => {
   const { courseId, chapterId } = req.params;
   const userId = req.userId;
 
-  try{
+  try {
     const { data, error } = await supabase
-      .from('submissions') 
+      .from('submissions')
       .select('*')
       .eq('user_id', userId)
       .eq('course_id', courseId)
       .eq('chapter_id', chapterId)
       .single()
 
-      if(!data) {
-        return successResponse(res, {status: 'not_submitted'}, 'Course progress retrieved successfully');
-      }
+    if (!data) {
+      return successResponse(res, { status: 'not_submitted' }, 'Course progress retrieved successfully');
+    }
 
-      if(error) throw error;
+    if (error) throw error;
 
-      
 
-      successResponse(res, data, 'Course progress retrieved successfully');
+
+    successResponse(res, data, 'Course progress retrieved successfully');
 
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
 })
+
 
 
 export default CoursesRoutes;

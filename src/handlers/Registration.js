@@ -38,7 +38,7 @@ RegistrationRoutes.post('/register', async (req, res) => {
         username,
         full_name,
       })
-      .select()
+      .select('email, username, full_name, role')
       .single();
 
     if (insertError) {
@@ -64,14 +64,18 @@ RegistrationRoutes.post('/login', async (req, res) => {
       .eq('email', email)
       .single();
 
+
+    if(!user) return res.status(404).json({message: "User with this email not fund or Not internet"})
+
     // Vérifier le mot de passe
     const validPassword = await bcrypt.compare(password, user.password);
     if (!validPassword) {
       return res.status(400).json({ error: 'Invalid email or password' });
     }
-
     // Générer un jeton JWT
     const token = generateToken(user);
+
+    //delete password
 
     res.json({ message: "Login successful", token, user });
   } catch (error) {
@@ -87,7 +91,7 @@ RegistrationRoutes.get('/users/:id', authMiddleware, async (req, res) => {
 
     const { data, error } = await supabase
       .from('users')
-      .select('*')
+      .select('email, username, full_name, role')
       .eq('id', req.params.id)
       .single();
 

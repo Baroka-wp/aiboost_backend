@@ -2,7 +2,7 @@ import express, { Router } from 'express';
 import { createClient } from '@supabase/supabase-js';
 import { config } from 'dotenv';
 import { successResponse, errorResponse } from '../utils/apiResponses.js';
-import { authMiddleware } from '../utils/utils.js';
+import { authMiddleware, AdminMiddleware, mentorAdminMiddleware } from '../utils/utils.js';
 
 config();
 
@@ -102,7 +102,7 @@ CoursesRoutes.post('/enroll/:courseId', authMiddleware, async (req, res) => {
       throw updateError;
     }
 
-    successResponse(res, updatedUser , 'Enrollment successful');
+    successResponse(res, updatedUser, 'Enrollment successful');
   } catch (error) {
     errorResponse(res, 'Failed to enroll in the course', 500, error);
   }
@@ -166,63 +166,259 @@ CoursesRoutes.get('/:courseId/chapters/:chapterId', authMiddleware, async (req, 
 // Update user progress
 CoursesRoutes.post('/:courseId/progress', authMiddleware, async (req, res) => {
   const { chapterId } = req.body;
+  const userId = req.userId;
+  const courseId = parseInt(req.params.courseId);
+
+  // Commencer une transaction
+  const { data, error } = await supabase.rpc('update_user_progress', {
+    p_user_id: userId,
+    p_course_id: courseId,
+    p_chapter_id: chapterId
+  });
+
+  if (error) {
+    console.error('Error updating user progress:', error);
+    return errorResponse(res, 'Failed to update user progress', 500, error);
+  }
+
+  successResponse(res, data, 'User progress updated successfully');
+});
+
+// Validate chapter after successful QCM
+CoursesRoutes.post('/:courseId/validate-chapter', authMiddleware, mentorAdminMiddleware, async (req, res) => {
+  const { chapterId, score, studentId } = req.body;
+  const courseId = parseInt(req.params.courseId);
+
+  if (score < 80) {
+    return errorResponse(res, 'Score is below 80%, chapter not validated', 400);
+  }
 
   try {
-    const { data: user, error: userError } = await supabase
-      .from('users')
-      .select('progress')
-      .eq('id', req.userId)
+    // Récupérer la progression actuelle
+    let { data: userProgress, error: progressError } = await supabase
+      .from('user_progress')
+      .select('*')
+      .eq('user_id', studentId)
+      .eq('course_id', courseId)
       .single();
 
-    if (userError) throw userError;
+    if (!userProgress) {
+      // Si aucune entrée n'existe, en créer une nouvelle
+      const { data: newProgress, error: insertError } = await supabase
+        .from('user_progress')
+        .insert({
+          user_id: studentId,
+          course_id: courseId,
+          current_chapter_id: chapterId,
+          completed_chapters: [chapterId]
+        })
+        .single();
 
-    let progress = user.progress || {};
+      if (insertError) throw insertError;
+      userProgress = newProgress;
+    } else {
+      const updatedCompletedChapters =
+        userProgress.completed_chapters.includes(chapterId)
+          ? userProgress.completed_chapters
+          : [...userProgress.completed_chapters, chapterId];
 
-    if (!progress[req.params.courseId]) {
-      progress[req.params.courseId] = {
-        completedChapters: [],
-        currentChapter: parseInt(chapterId)
-      };
+      const { data: updatedProgress, error: updateError } = await supabase
+        .from('user_progress')
+        .update({
+          current_chapter_id: chapterId,
+          completed_chapters: updatedCompletedChapters
+        })
+        .eq('user_id', studentId)
+        .eq('course_id', courseId)
+        .single();
+
+      if (updateError) throw updateError;
+      userProgress = updatedProgress;
     }
 
-    if (!progress[req.params.courseId].completedChapters.includes(parseInt(chapterId))) {
-      progress[req.params.courseId].completedChapters.push(parseInt(chapterId));
-      progress[req.params.courseId].currentChapter = parseInt(chapterId) + 1;
-    }
-
-    const { data, error } = await supabase
-      .from('users')
-      .update({ progress })
-      .eq('id', req.userId)
-      .single();
-
-    if (error) throw error;
-
-    successResponse(res, progress[req.params.courseId], 'User progress updated successfully');
+    successResponse(res, userProgress, 'Chapter validated and progress updated successfully');
   } catch (error) {
-    errorResponse(res, 'Failed to update user progress', 500, error);
+    errorResponse(res, 'Failed to validate chapter and update progress', 500, error);
   }
 });
 
 // Get user progress for a specific course
 CoursesRoutes.get('/:courseId/progress', authMiddleware, async (req, res) => {
+  const userId = req.userId;
+  const courseId = parseInt(req.params.courseId);
+
   try {
-    const { data: user, error: userError } = await supabase
-      .from('users')
-      .select('progress')
-      .eq('id', req.userId)
+    const { data: userProgress, error: progressError } = await supabase
+      .from('user_progress')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('course_id', courseId)
       .single();
 
-    if (userError) throw userError;
+    if (progressError && progressError.code !== 'PGRST116') {
+      throw progressError;
+    }
 
-    const progress = user.progress && user.progress[req.params.courseId]
-      ? user.progress[req.params.courseId]
-      : { completedChapters: [], currentChapter: 1 };
+    if (!userProgress) {
+      return successResponse(res, { current_chapter_id: 1, completed_chapters: [] }, 'Default progress retrieved');
+    }
 
-    successResponse(res, progress, 'User progress retrieved successfully');
+    successResponse(res, userProgress, 'User progress retrieved successfully');
   } catch (error) {
     errorResponse(res, 'Failed to retrieve user progress', 500, error);
   }
 });
+
+// Get progress for all enrolled courses
+CoursesRoutes.get('/enrolled/progress/:userId', authMiddleware, async (req, res) => {
+  const userId = req.params.userId;
+
+  try {
+    // Récupérer les cours inscrits de l'utilisateur
+    const { data: user, error: userError } = await supabase
+      .from('users')
+      .select('enrolled_courses')
+      .eq('id', userId)
+      .single();
+
+    if (userError) throw userError;
+
+    const enrolledCoursesIds = user.enrolled_courses || [];
+
+    if (enrolledCoursesIds.length === 0) {
+      return successResponse(res, [], 'User has no enrolled courses');
+    }
+
+    // Récupérer la progression pour tous les cours inscrits
+    const { data: progress, error: progressError } = await supabase
+      .from('user_progress')
+      .select('*')
+      .eq('user_id', userId)
+      .in('course_id', enrolledCoursesIds);
+
+    if (progressError) throw progressError;
+
+    // Récupérer le nombre total de chapitres pour chaque cours
+    const { data: courses, error: coursesError } = await supabase
+      .from('courses')
+      .select('id, chapters(count)')
+      .in('id', enrolledCoursesIds);
+
+    if (coursesError) throw coursesError;
+
+    // Calculer le pourcentage de progression pour chaque cours
+    const progressWithPercentage = progress.map(p => {
+      const course = courses.find(c => c.id === p.course_id);
+      const totalChapters = course.chapters[0].count;
+      const completedChapters = p.completed_chapters ? p.completed_chapters.length : 0;
+      const percentage = Math.round((completedChapters / totalChapters) * 100);
+      return {
+        ...p,
+        totalChapters,
+        percentage
+      };
+    });
+
+    successResponse(res, progressWithPercentage, 'Course progress retrieved successfully');
+  } catch (error) {
+    errorResponse(res, 'Failed to retrieve course progress', 500, error);
+  }
+});
+
+
+// submik work link
+CoursesRoutes.post('/:courseId/chapters/:chapterId/submit-link', authMiddleware, async (req, res) => {
+  const { courseId, chapterId } = req.params;
+  const { link } = req.body;
+  const userId = req.userId;
+
+  try {
+    const { data, error } = await supabase
+      .from('submissions')
+      .insert({
+        user_id: userId,
+        course_id: courseId,
+        chapter_id: chapterId,
+        link: link,
+        status: 'pending'
+      })
+      .single();
+
+    if (error) throw error;
+
+    res.json({ success: true, submission: data });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// mettre à jour une soumission existante
+CoursesRoutes.put('/submissions/:submissionId', authMiddleware, async (req, res) => {
+  const { submissionId } = req.params;
+  const { link } = req.body;
+  const userId = req.userId;
+
+  try {
+    // Vérifier si la soumission existe et appartient à l'utilisateur
+    const { data: existingSubmission, error: fetchError } = await supabase
+      .from('submissions')
+      .select('*')
+      .eq('id', submissionId)
+      .eq('user_id', userId)
+      .single();
+
+    if (fetchError) {
+      return errorResponse(res, 'Submission not found or you do not have permission to update it', 404);
+    }
+
+    // Mettre à jour la soumission
+    const { data, error } = await supabase
+      .from('submissions')
+      .update({
+        link,
+        status: 'pending',
+        updated_at: new Date()
+      })
+      .eq('id', submissionId)
+      .single();
+
+    if (error) throw error;
+
+    successResponse(res, data, 'Submission updated successfully');
+  } catch (error) {
+    errorResponse(res, 'Failed to update submission', 500, error);
+  }
+});
+
+
+CoursesRoutes.get('/:courseId/chapters/:chapterId/submission-status', authMiddleware, async (req, res) => {
+  const { courseId, chapterId } = req.params;
+  const userId = req.userId;
+
+  try {
+    const { data, error } = await supabase
+      .from('submissions')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('course_id', courseId)
+      .eq('chapter_id', chapterId)
+      .single()
+
+    if (!data) {
+      return successResponse(res, { status: 'not_submitted' }, 'Course progress retrieved successfully');
+    }
+
+    if (error) throw error;
+
+
+
+    successResponse(res, data, 'Course progress retrieved successfully');
+
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+})
+
+
 
 export default CoursesRoutes;

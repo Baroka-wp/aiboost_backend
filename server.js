@@ -4,6 +4,7 @@ import { config } from 'dotenv';
 import CoursesRoutes from './src/handlers/courses.js';
 import RegistrationRoutes from './src/handlers/Registration.js';
 import { errorHandler } from './src/middleware/errorHandler.js';
+import AdminRoutes from './src/handlers/admin.js';
 
 config();
 
@@ -14,6 +15,7 @@ app.use(express.json());
 
 app.use('/courses', CoursesRoutes);
 app.use('/auth', RegistrationRoutes);
+app.use('/admin', AdminRoutes);
 
 // Error handling middleware
 app.use(errorHandler);

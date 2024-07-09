@@ -15,13 +15,23 @@ CoursesRoutes.get('/', async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('courses')
-      .select('*');
+      .select(`
+        *,
+        chapters(*)
+      `)
+      .order('id', { ascending: true });
 
     if (error) throw error;
 
-    successResponse(res, data, 'Courses retrieved successfully');
+    // Transformation des données pour une meilleure structure
+    const formattedData = data.map(course => ({
+      ...course,
+      chapters: course.chapters.sort((a, b) => a.id - b.id) // Tri des chapitres par ID
+    }));
+
+    successResponse(res, formattedData, 'Courses and chapters retrieved successfully');
   } catch (error) {
-    errorResponse(res, 'Failed to retrieve courses', 500, error);
+    errorResponse(res, 'Failed to retrieve courses and chapters', 500, error);
   }
 });
 
@@ -440,6 +450,158 @@ CoursesRoutes.post('/submissions/:submissionId/assign', authMiddleware, mentorAd
   }
 });
 
+// Route pour créer un cours
+CoursesRoutes.post('/', authMiddleware, AdminMiddleware, async (req, res) => {
+  const { title, description, price } = req.body;
+  try {
+    const { data, error } = await supabase
+      .from('courses')
+      .insert({ title, description, price })
+      .single();
 
+    if (error) throw error;
+
+    successResponse(res, data, 'Course created successfully');
+  } catch (error) {
+    errorResponse(res, 'Failed to create course', 500, error);
+  }
+});
+
+// Route pour mettre à jour un cours
+CoursesRoutes.put('/:courseId', authMiddleware, AdminMiddleware, async (req, res) => {
+  const { courseId } = req.params;
+  const { title, description, price } = req.body;
+  try {
+    const { data, error } = await supabase
+      .from('courses')
+      .update({ title, description, price })
+      .eq('id', courseId)
+      .single();
+
+    if (error) throw error;
+
+    successResponse(res, data, 'Course updated successfully');
+  } catch (error) {
+    errorResponse(res, 'Failed to update course', 500, error);
+  }
+});
+
+// Route pour supprimer un cours
+CoursesRoutes.delete('/:courseId', authMiddleware, AdminMiddleware, async (req, res) => {
+  const { courseId } = req.params;
+  try {
+    const { data, error } = await supabase
+      .from('courses')
+      .delete()
+      .eq('id', courseId);
+
+    if (error) throw error;
+
+    successResponse(res, data, 'Course deleted successfully');
+  } catch (error) {
+    errorResponse(res, 'Failed to delete course', 500, error);
+  }
+});
+
+// Route pour obtenir les utilisateurs inscrits à un cours
+CoursesRoutes.get('/:courseId/enrolled-users', authMiddleware, AdminMiddleware, async (req, res) => {
+  const { courseId } = req.params;
+  try {
+    const { data, error } = await supabase
+      .from('users')
+      .select('id, full_name, email')
+      .contains('enrolled_courses', [courseId]);
+          
+    if (error) throw error;
+
+    successResponse(res, data, 'Enrolled users retrieved successfully');
+  } catch (error) {
+    errorResponse(res, 'Failed to retrieve enrolled users', 500, error);
+  }
+});
+
+
+// Route pour désinscrire un utilisateur d'un cours
+CoursesRoutes.delete('/:courseId/enrolled-users/:userId', authMiddleware, AdminMiddleware, async (req, res) => {
+  const { courseId, userId } = req.params;
+  try {
+    const { data: user, error: userError } = await supabase
+      .from('users')
+      .select('enrolled_courses')
+      .eq('id', userId)
+      .single();
+
+    if (userError) throw userError;
+
+    const updatedEnrolledCourses = user.enrolled_courses.filter(id => id !== parseInt(courseId));
+
+    const { data, error } = await supabase
+      .from('users')
+      .update({ enrolled_courses: updatedEnrolledCourses })
+      .eq('id', userId);
+
+    if (error) throw error;
+
+    successResponse(res, data, 'User unenrolled successfully');
+  } catch (error) {
+    errorResponse(res, 'Failed to unenroll user', 500, error);
+  }
+});
+
+// Route pour créer un chapitre
+CoursesRoutes.post('/:courseId/chapters', authMiddleware, AdminMiddleware, async (req, res) => {
+  const { courseId } = req.params;
+  const { title, content } = req.body;
+  try {
+    const { data, error } = await supabase
+      .from('chapters')
+      .insert({ course_id: courseId, title, content })
+      .single();
+
+    if (error) throw error;
+
+    successResponse(res, data, 'Chapter created successfully');
+  } catch (error) {
+    errorResponse(res, 'Failed to create chapter', 500, error);
+  }
+});
+
+// Route pour mettre à jour un chapitre
+CoursesRoutes.put('/:courseId/chapters/:chapterId', authMiddleware, AdminMiddleware, async (req, res) => {
+  const { courseId, chapterId } = req.params;
+  const { title, content } = req.body;
+  try {
+    const { data, error } = await supabase
+      .from('chapters')
+      .update({ title, content })
+      .eq('id', chapterId)
+      .eq('course_id', courseId)
+      .single();
+
+    if (error) throw error;
+
+    successResponse(res, data, 'Chapter updated successfully');
+  } catch (error) {
+    errorResponse(res, 'Failed to update chapter', 500, error);
+  }
+});
+
+// Route pour supprimer un chapitre
+CoursesRoutes.delete('/:courseId/chapters/:chapterId', authMiddleware, AdminMiddleware, async (req, res) => {
+  const { courseId, chapterId } = req.params;
+  try {
+    const { data, error } = await supabase
+      .from('chapters')
+      .delete()
+      .eq('id', chapterId)
+      .eq('course_id', courseId);
+
+    if (error) throw error;
+
+    successResponse(res, data, 'Chapter deleted successfully');
+  } catch (error) {
+    errorResponse(res, 'Failed to delete chapter', 500, error);
+  }
+});
 
 export default CoursesRoutes;

@@ -112,10 +112,10 @@ AdminRoutes.put('/mentor/submissions/:submissionId', authMiddleware, mentorAdmin
 // Mise à jour d'un utilisateur
 AdminRoutes.put('/users/:userId', authMiddleware, AdminMiddleware, async (req, res) => {
   const { userId } = req.params;
-  const { email, full_name, role, password } = req.body;
+  const { email, full_name, username, role, password } = req.body;
 
   try {
-    let updateData = { email, full_name, role };
+    let updateData = { email, full_name, role, username };
 
     if (password) {
       const hashedPassword = await bcrypt.hash(password, 10);
@@ -220,6 +220,7 @@ AdminRoutes.get('/users/:userId/progress', authMiddleware, AdminMiddleware, asyn
       .eq('id', userId)
       .single();
 
+    
     if (enrolledError) throw enrolledError;
 
     const courseIds = enrolledCourses.enrolled_courses || [];
@@ -256,7 +257,91 @@ AdminRoutes.get('/users/:userId/progress', authMiddleware, AdminMiddleware, asyn
   }
 });
 
+// Récupérer tous les mentors avec pagination
+AdminRoutes.get('/mentors', authMiddleware, AdminMiddleware, async (req, res) => {
+  const { page = 1, limit = 10 } = req.query;
+  const offset = (page - 1) * limit;
 
+  try {
+    const { data, error, count } = await supabase
+      .from('users')
+      .select('id, email, username, full_name, role, is_suspended', { count: 'exact' })
+      .eq('role', 'mentor')
+      .range(offset, offset + limit - 1)
+      .order('id', { ascending: true });
+
+    if (error) throw error;
+
+    const totalPages = Math.ceil(count / limit);
+
+    successResponse(res, { mentors: data, totalPages, currentPage: page }, 'Mentors retrieved successfully');
+  } catch (error) {
+    errorResponse(res, 'Failed to retrieve mentors', 500, error);
+  }
+});
+
+// Récupérer tous les étudiants avec pagination
+AdminRoutes.get('/students', authMiddleware, AdminMiddleware, async (req, res) => {
+  const { page = 1, limit = 10 } = req.query;
+  const offset = (page - 1) * limit;
+
+  try {
+    const { data, error, count } = await supabase
+      .from('users')
+      .select('id, email, username, full_name, role, is_suspended, enrolled_courses', { count: 'exact' })
+      .eq('role', 'student')
+      .range(offset, offset + limit - 1)
+      .order('id', { ascending: true });
+
+    if (error) throw error;
+
+    const totalPages = Math.ceil(count / limit);
+
+    // Récupérer les informations des cours pour chaque étudiant
+    const studentsWithCourseInfo = await Promise.all(data.map(async (student) => {
+      if (student.enrolled_courses && student.enrolled_courses.length > 0) {
+        const { data: coursesData, error: coursesError } = await supabase
+          .from('courses')
+          .select('id, title')
+          .in('id', student.enrolled_courses);
+
+        if (coursesError) throw coursesError;
+
+        // Récupérer la progression pour chaque cours
+        const progressPromises = student.enrolled_courses.map(async (courseId) => {
+          const { data: progressData, error: progressError } = await supabase
+            .from('user_progress')
+            .select('completed_chapters')
+            .eq('user_id', student.id)
+            .eq('course_id', courseId)
+            .single();
+
+          if (progressError && progressError.code !== 'PGRST116') throw progressError;
+
+          return {
+            courseId,
+            progress: progressData ? (progressData.completed_chapters.length / coursesData.find(c => c.id === courseId).chapters_count) * 100 : 0
+          };
+        });
+
+        const progressData = await Promise.all(progressPromises);
+
+        return {
+          ...student,
+          courses: coursesData.map(course => ({
+            ...course,
+            progress: progressData.find(p => p.courseId === course.id).progress
+          }))
+        };
+      }
+      return student;
+    }));
+
+    successResponse(res, { students: studentsWithCourseInfo, totalPages, currentPage: page }, 'Students retrieved successfully');
+  } catch (error) {
+    errorResponse(res, 'Failed to retrieve students', 500, error);
+  }
+});
 
 
 export default AdminRoutes;

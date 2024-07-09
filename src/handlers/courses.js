@@ -417,7 +417,28 @@ CoursesRoutes.get('/:courseId/chapters/:chapterId/submission-status', authMiddle
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
-})
+});
+
+
+// Route pour assigner un mentor à une soumission
+CoursesRoutes.post('/submissions/:submissionId/assign', authMiddleware, mentorAdminMiddleware, async (req, res) => {
+  const { submissionId } = req.params;
+  const mentorId = req.userId;
+
+  try {
+    const { data, error } = await supabase
+      .from('submissions')
+      .update({ mentor_id: mentorId })
+      .eq('id', submissionId)
+      .is('mentor_id', null)
+      .single();
+
+    if (error) throw error;
+    successResponse(res, data, 'Submission assigned successfully');
+  } catch (error) {
+    errorResponse(res, 'Failed to assign submission', 500, error);
+  }
+});
 
 
 

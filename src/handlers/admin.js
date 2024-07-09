@@ -17,7 +17,7 @@ AdminRoutes.get('/users', authMiddleware, AdminMiddleware, async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('users')
-      .select('email, username, full_name, role')
+      .select('id, email, username, full_name, role')
       .order('id', { ascending: true });
 
     if (error) throw error;
@@ -68,7 +68,6 @@ AdminRoutes.post('/users', authMiddleware, AdminMiddleware, async (req, res) => 
   }
 });
 
-
 AdminRoutes.get('/mentor/submissions', authMiddleware, mentorAdminMiddleware, async (req, res) => {
   try {
     const { data, error } = await supabase
@@ -77,7 +76,7 @@ AdminRoutes.get('/mentor/submissions', authMiddleware, mentorAdminMiddleware, as
         *,
         users(full_name, email),
         courses(title),
-        chapters(title)
+        chapters(title, content)
       `)
       .in('status', ['pending', 'needs_revision'])
       .order('created_at', { ascending: false });
@@ -109,5 +108,155 @@ AdminRoutes.put('/mentor/submissions/:submissionId', authMiddleware, mentorAdmin
     errorResponse(res, 'Failed to update submission', 500, error);
   }
 });
+
+// Mise à jour d'un utilisateur
+AdminRoutes.put('/users/:userId', authMiddleware, AdminMiddleware, async (req, res) => {
+  const { userId } = req.params;
+  const { email, full_name, role, password } = req.body;
+
+  try {
+    let updateData = { email, full_name, role };
+
+    if (password) {
+      const hashedPassword = await bcrypt.hash(password, 10);
+      updateData.password = hashedPassword;
+    }
+
+    const { data, error } = await supabase
+      .from('users')
+      .update(updateData)
+      .eq('id', userId)
+      .single();
+
+    if (error) throw error;
+
+    successResponse(res, data, 'User updated successfully');
+  } catch (error) {
+    errorResponse(res, 'Failed to update user', 500, error);
+  }
+});
+
+// Suppression d'un utilisateur
+AdminRoutes.delete('/users/:userId', authMiddleware, AdminMiddleware, async (req, res) => {
+  const { userId } = req.params;
+
+  try {
+    const { data, error } = await supabase
+      .from('users')
+      .delete()
+      .eq('id', userId);
+
+    if (error) throw error;
+
+    successResponse(res, data, 'User deleted successfully');
+  } catch (error) {
+    errorResponse(res, 'Failed to delete user', 500, error);
+  }
+});
+
+// Suspension/réactivation d'un utilisateur
+AdminRoutes.put('/users/:userId/suspend', authMiddleware, AdminMiddleware, async (req, res) => {
+  const { userId } = req.params;
+  const { is_suspended } = req.body;
+
+  try {
+    const { data, error } = await supabase
+      .from('users')
+      .update({ is_suspended })
+      .eq('id', userId)
+      .single();
+
+    if (error) throw error;
+
+    successResponse(res, data, `User ${is_suspended ? 'suspended' : 'reactivated'} successfully`);
+  } catch (error) {
+    errorResponse(res, 'Failed to update user suspension status', 500, error);
+  }
+});
+
+// Inscription d'un utilisateur à un cours
+AdminRoutes.post('/users/:userId/enroll', authMiddleware, AdminMiddleware, async (req, res) => {
+  const { userId } = req.params;
+  const { course_id } = req.body;
+
+  try {
+    const { data: user, error: userError } = await supabase
+      .from('users')
+      .select('enrolled_courses')
+      .eq('id', userId)
+      .single();
+
+    if (userError) throw userError;
+
+    const enrolledCourses = user.enrolled_courses || [];
+    if (!enrolledCourses.includes(course_id)) {
+      enrolledCourses.push(course_id);
+
+      const { data, error } = await supabase
+        .from('users')
+        .update({ enrolled_courses: enrolledCourses })
+        .eq('id', userId)
+        .single();
+
+      if (error) throw error;
+
+      successResponse(res, data, 'User enrolled in course successfully');
+    } else {
+      successResponse(res, null, 'User already enrolled in this course');
+    }
+  } catch (error) {
+    errorResponse(res, 'Failed to enroll user in course', 500, error);
+  }
+});
+
+// Obtention de la progression d'un utilisateur
+AdminRoutes.get('/users/:userId/progress', authMiddleware, AdminMiddleware, async (req, res) => {
+  const { userId } = req.params;
+
+  try {
+    const { data: enrolledCourses, error: enrolledError } = await supabase
+      .from('users')
+      .select('enrolled_courses')
+      .eq('id', userId)
+      .single();
+
+    if (enrolledError) throw enrolledError;
+
+    const courseIds = enrolledCourses.enrolled_courses || [];
+
+    const { data: progress, error: progressError } = await supabase
+      .from('user_progress')
+      .select('*')
+      .eq('user_id', userId)
+      .in('course_id', courseIds);
+
+    if (progressError) throw progressError;
+
+    const { data: courses, error: coursesError } = await supabase
+      .from('courses')
+      .select('id, title, chapters(count)')
+      .in('id', courseIds);
+
+    if (coursesError) throw coursesError;
+
+    const progressWithDetails = progress.map(p => {
+      const course = courses.find(c => c.id === p.course_id);
+      return {
+        course_id: p.course_id,
+        course_title: course.title,
+        total_chapters: course.chapters[0].count,
+        completed_chapters: p.completed_chapters,
+        percentage: Math.round((p.completed_chapters.length / course.chapters[0].count) * 100)
+      };
+    });
+
+    successResponse(res, progressWithDetails, 'User progress retrieved successfully');
+  } catch (error) {
+    errorResponse(res, 'Failed to retrieve user progress', 500, error);
+  }
+});
+
+
+
 
 export default AdminRoutes;

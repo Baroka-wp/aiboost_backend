@@ -452,16 +452,37 @@ CoursesRoutes.post('/submissions/:submissionId/assign', authMiddleware, mentorAd
 
 // Route pour créer un cours
 CoursesRoutes.post('/', authMiddleware, AdminMiddleware, async (req, res) => {
-  const { title, description, price } = req.body;
+  const { title, description, price, category_id, duration, tags } = req.body;
   try {
-    const { data, error } = await supabase
+    const { data: course, error: courseError } = await supabase
       .from('courses')
-      .insert({ title, description, price })
+      .insert({ title, description, price, category_id, duration })
       .single();
 
-    if (error) throw error;
+    if (courseError) throw courseError;
 
-    successResponse(res, data, 'Course created successfully');
+    if (tags && tags.length > 0) {
+      const tagInserts = tags.map(tag => ({ name: tag }));
+      const { data: insertedTags, error: tagError } = await supabase
+        .from('tags')
+        .upsert(tagInserts, { onConflict: 'name' })
+        .select('id, name');
+
+      if (tagError) throw tagError;
+
+      const courseTagsInserts = insertedTags.map(tag => ({
+        course_id: course.id,
+        tag_id: tag.id
+      }));
+
+      const { error: courseTagError } = await supabase
+        .from('course_tags')
+        .insert(courseTagsInserts);
+
+      if (courseTagError) throw courseTagError;
+    }
+
+    successResponse(res, course, 'Course created successfully');
   } catch (error) {
     errorResponse(res, 'Failed to create course', 500, error);
   }
@@ -511,7 +532,7 @@ CoursesRoutes.get('/:courseId/enrolled-users', authMiddleware, AdminMiddleware, 
       .from('users')
       .select('id, full_name, email')
       .contains('enrolled_courses', [courseId]);
-          
+
     if (error) throw error;
 
     successResponse(res, data, 'Enrolled users retrieved successfully');

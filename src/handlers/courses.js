@@ -333,15 +333,25 @@ CoursesRoutes.post('/:courseId/enroll', authMiddleware, AdminMiddleware, async (
   }
 });
 
-// Unenroll a user from a course
-CoursesRoutes.delete('/:courseId/enrolled-users/:userId', authMiddleware, AdminMiddleware, async (req, res) => {
+// Route pour désinscrire un utilisateur d'un cours
+CoursesRoutes.delete('/:courseId/enrolled_users/:userId', authMiddleware, AdminMiddleware, async (req, res) => {
   const { courseId, userId } = req.params;
 
   try {
-    const { data, error } = await supabase.rpc('unenroll_user_from_course', {
-      p_user_id: parseInt(userId),
-      p_course_id: parseInt(courseId)
-    });
+    const { data: user, error: userError } = await supabase
+      .from('users')
+      .select('enrolled_courses')
+      .eq('id', userId)
+      .single();
+
+    if (userError) throw userError;
+
+    const updatedEnrolledCourses = user.enrolled_courses.filter(id => id !== parseInt(courseId));
+
+    const { data, error } = await supabase
+      .from('users')
+      .update({ enrolled_courses: updatedEnrolledCourses })
+      .eq('id', userId);
 
     if (error) throw error;
 
@@ -733,40 +743,13 @@ CoursesRoutes.get('/:courseId/enrolled-users', authMiddleware, AdminMiddleware, 
       .contains('enrolled_courses', [courseId]);
 
     if (error) throw error;
-
+    
     successResponse(res, data, 'Enrolled users retrieved successfully');
   } catch (error) {
     errorResponse(res, 'Failed to retrieve enrolled users', 500, error);
   }
 });
 
-
-// Route pour désinscrire un utilisateur d'un cours
-CoursesRoutes.delete('/:courseId/enrolled-users/:userId', authMiddleware, AdminMiddleware, async (req, res) => {
-  const { courseId, userId } = req.params;
-  try {
-    const { data: user, error: userError } = await supabase
-      .from('users')
-      .select('enrolled_courses')
-      .eq('id', userId)
-      .single();
-
-    if (userError) throw userError;
-
-    const updatedEnrolledCourses = user.enrolled_courses.filter(id => id !== parseInt(courseId));
-
-    const { data, error } = await supabase
-      .from('users')
-      .update({ enrolled_courses: updatedEnrolledCourses })
-      .eq('id', userId);
-
-    if (error) throw error;
-
-    successResponse(res, data, 'User unenrolled successfully');
-  } catch (error) {
-    errorResponse(res, 'Failed to unenroll user', 500, error);
-  }
-});
 
 // Route pour ajouter un chapitre
 CoursesRoutes.post('/:courseId/chapters', authMiddleware, AdminMiddleware, async (req, res) => {

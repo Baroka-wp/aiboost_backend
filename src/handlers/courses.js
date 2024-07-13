@@ -42,14 +42,14 @@ CoursesRoutes.get('/', async (req, res) => {
 // Route pour créer un cours
 CoursesRoutes.post('/', authMiddleware, AdminMiddleware, async (req, res) => {
   const { title, description, price, category_id, duration, tags } = req.body;
-  
+
   // Validation des champs requis
   if (!title || !description || !category_id || !duration) {
     return errorResponse(res, 'Missing required fields', 400);
   }
 
   // Début de la transaction
-  const { data, error } = await supabase.rpc('create_course_with_tags', { 
+  const { data, error } = await supabase.rpc('create_course_with_tags', {
     p_title: title,
     p_description: description,
     p_price: price,
@@ -632,7 +632,7 @@ CoursesRoutes.post('/submissions/:submissionId/assign', authMiddleware, mentorAd
 CoursesRoutes.put('/:courseId', authMiddleware, AdminMiddleware, async (req, res) => {
   const { courseId } = req.params;
   const { title, description, price, category_id, duration, tags } = req.body;
-  
+
   try {
     // Mise à jour du cours
     const { data: course, error: courseError } = await supabase
@@ -774,26 +774,27 @@ CoursesRoutes.post('/:courseId/chapters', authMiddleware, AdminMiddleware, async
   const { title, content } = req.body;
   try {
     // Vérifier si le cours existe
-    const { data: course, error: courseError } = await supabase
-      .from('courses')
-      .select('id')
-      .eq('id', courseId)
-      .single();
-
-    if (courseError) throw courseError;
-    if (!course) {
-      return errorResponse(res, 'Course not found', 404);
-    }
 
     // Ajouter le chapitre
     const { data: chapter, error: chapterError } = await supabase
       .from('chapters')
       .insert({ course_id: courseId, title, content })
-      .single();
+      .single()
 
     if (chapterError) throw chapterError;
 
-    successResponse(res, chapter, 'Chapter created successfully');
+    const { data: course, error: courseError } = await supabase
+      .from('courses')
+      .select('id')
+      .eq('id', courseId)
+      .single()
+      .select(`
+        chapters(id, title, content)
+      `);
+
+    if (courseError) throw courseError;
+
+    successResponse(res, course?.chapters, 'Chapter created successfully');
   } catch (error) {
     errorResponse(res, 'Failed to create chapter', 500, error);
   }

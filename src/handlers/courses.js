@@ -814,7 +814,18 @@ CoursesRoutes.put('/:courseId/chapters/:chapterId', authMiddleware, AdminMiddlew
 
     if (error) throw error;
 
-    successResponse(res, data, 'Chapter updated successfully');
+    const { data: course, error: courseError } = await supabase
+      .from('courses')
+      .select('id')
+      .eq('id', courseId)
+      .single()
+      .select(`
+        chapters(id, title, content)
+      `);
+
+    if (courseError) throw courseError;
+
+    successResponse(res, course.chapters, 'Chapter updated successfully');
   } catch (error) {
     errorResponse(res, 'Failed to update chapter', 500, error);
   }

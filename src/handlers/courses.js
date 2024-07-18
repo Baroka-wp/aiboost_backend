@@ -206,7 +206,11 @@ CoursesRoutes.get('/enrolled', authMiddleware, async (req, res) => {
 // route pour inscrire un user a un cours
 CoursesRoutes.post('/enroll/:courseId', authMiddleware, async (req, res) => {
   const { courseId } = req.params;
-  const userId = req.userId;
+  const { email } = req.body;
+
+  if (!email) {
+    return errorResponse(res, 'Email is required', 400);
+  }
 
   try {
     // Vérifier si le cours existe
@@ -217,43 +221,60 @@ CoursesRoutes.post('/enroll/:courseId', authMiddleware, async (req, res) => {
       .single();
 
     if (courseError || !course) {
-      return errorResponse(res, 'Course not found', 404);
+      throw new Error('Course not found');
     }
 
-    // Récupérer les cours inscrits de l'utilisateur
+    // Rechercher l'utilisateur par email
     const { data: user, error: userError } = await supabase
       .from('users')
-      .select('enrolled_courses')
-      .eq('id', userId)
+      .select('id, enrolled_courses')
+      .eq('email', email)
       .single();
 
-    if (userError) {
-      throw userError;
+    if (userError || !user) {
+      throw new Error('User not found');
     }
 
     // Vérifier si l'utilisateur est déjà inscrit au cours
     const enrolledCourses = user.enrolled_courses || [];
     if (enrolledCourses.includes(parseInt(courseId))) {
-      return errorResponse(res, 'User already enrolled in this course', 400);
+      throw new Error('User already enrolled in this course');
     }
 
-    // Ajouter le cours à la liste des cours inscrits
+    // Ajouter le cours à la liste des cours inscrits de l'utilisateur
     enrolledCourses.push(parseInt(courseId));
 
-    // Mettre à jour le profil de l'utilisateur et incrémenter enrolled_count
-    const { data: updatedUser, error: updateError } = await supabase
-      .rpc('enroll_user_in_course', {
-        p_user_id: userId,
-        p_course_id: parseInt(courseId)
-      });
+    // Mettre à jour le profil de l'utilisateur
+    const { error: updateUserError } = await supabase
+      .from('users')
+      .update({ enrolled_courses: enrolledCourses })
+      .eq('id', user.id);
 
-    if (updateError) {
-      throw updateError;
+    if (updateUserError) {
+      throw updateUserError;
     }
 
-    successResponse(res, updatedUser, 'Enrollment successful');
+    // Incrémenter enrolled_count du cours
+    const { error: updateCourseError } = await supabase
+      .from('courses')
+      .update({ enrolled_count: course.enrolled_count + 1 })
+      .eq('id', courseId);
+
+    if (updateCourseError) {
+      throw updateCourseError;
+    }
+    const { data, error } = await supabase
+      .from('users')
+      .select('id, full_name, email')
+      .contains('enrolled_courses', [courseId]);
+
+    if (error) throw error;
+
+    successResponse(res, data, 'Enrolled users retrieved successfully');
   } catch (error) {
-    errorResponse(res, 'Failed to enroll in the course', 500, error);
+    // En cas d'erreur, annuler la transaction
+    console.log(error)
+    errorResponse(res, error.message, 500, error);
   }
 });
 
@@ -348,14 +369,31 @@ CoursesRoutes.delete('/:courseId/enrolled_users/:userId', authMiddleware, AdminM
 
     const updatedEnrolledCourses = user.enrolled_courses.filter(id => id !== parseInt(courseId));
 
-    const { data, error } = await supabase
+    const { data: users, error } = await supabase
       .from('users')
       .update({ enrolled_courses: updatedEnrolledCourses })
       .eq('id', userId);
 
     if (error) throw error;
 
-    successResponse(res, data, 'User unenrolled successfully');
+    // Vérifier si le cours existe
+    const { data: course, error: courseError } = await supabase
+      .from('courses')
+      .select('id, enrolled_count')
+      .eq('id', courseId)
+      .single();
+
+     // Incrémenter enrolled_count du cours
+    const { error: updateCourseError } = await supabase
+      .from('courses')
+      .update({ enrolled_count: course.enrolled_count - 1 })
+      .eq('id', courseId);
+
+    if (updateCourseError) {
+      throw updateCourseError;
+    }
+
+    successResponse(res, users, 'User unenrolled successfully');
   } catch (error) {
     errorResponse(res, 'Failed to unenroll user', 500, error);
   }
@@ -743,7 +781,7 @@ CoursesRoutes.get('/:courseId/enrolled-users', authMiddleware, AdminMiddleware, 
       .contains('enrolled_courses', [courseId]);
 
     if (error) throw error;
-    
+
     successResponse(res, data, 'Enrolled users retrieved successfully');
   } catch (error) {
     errorResponse(res, 'Failed to retrieve enrolled users', 500, error);

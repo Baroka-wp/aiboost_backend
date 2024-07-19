@@ -3,12 +3,50 @@ import { createClient } from '@supabase/supabase-js';
 import { config } from 'dotenv';
 import { successResponse, errorResponse } from '../utils/apiResponses.js';
 import { authMiddleware, AdminMiddleware, mentorAdminMiddleware } from '../utils/utils.js';
+import cloudinary from 'cloudinary';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
+
 
 config();
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
+// Configuration de Cloudinary
+cloudinary.v2.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
+
+// Configuration de multer pour l'upload des fichiers
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, '/tmp/'); // Stockage temporaire
+  },
+  filename: function (req, file, cb) {
+    cb(null, file.fieldname + '-' + Date.now() + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({ storage: storage });
+
 const CoursesRoutes = Router();
+
+// Fonction pour uploader l'image sur Cloudinary
+const uploadToCloudinary = async (filePath) => {
+  try {
+    const result = await cloudinary.v2.uploader.upload(filePath, {
+      folder: 'course_covers'
+    });
+    fs.unlinkSync(filePath); // Supprimer le fichier temporaire
+    return result.secure_url;
+  } catch (error) {
+    console.error('Error uploading to Cloudinary:', error);
+    throw error;
+  }
+};
 
 // Get all courses
 CoursesRoutes.get('/', async (req, res) => {
@@ -40,31 +78,36 @@ CoursesRoutes.get('/', async (req, res) => {
 });
 
 // Route pour créer un cours
-CoursesRoutes.post('/', authMiddleware, AdminMiddleware, async (req, res) => {
+CoursesRoutes.post('/', authMiddleware, AdminMiddleware, upload.single('coverImage'), async (req, res) => {
   const { title, description, price, category_id, duration, tags } = req.body;
 
-  // Validation des champs requis
   if (!title || !description || !category_id || !duration) {
     return errorResponse(res, 'Missing required fields', 400);
   }
 
-  // Début de la transaction
-  const { data, error } = await supabase.rpc('create_course_with_tags', {
-    p_title: title,
-    p_description: description,
-    p_price: price,
-    p_category_id: category_id,
-    p_duration: duration,
-    p_tags: tags
-  });
+  try {
+    let coverImageUrl = null;
+    if (req.file) {
+      coverImageUrl = await uploadToCloudinary(req.file.path);
+    }
 
-  if (error) {
+    const { data, error } = await supabase.rpc('create_course_with_tags', {
+      p_title: title,
+      p_description: description,
+      p_price: price,
+      p_category_id: category_id,
+      p_duration: duration,
+      p_tags: JSON.parse(tags),
+      p_cover_image_url: coverImageUrl
+    });
+
+    if (error) throw error;
+
+    successResponse(res, data, 'Course created successfully');
+  } catch (error) {
     console.error('Error creating course:', error);
-    return errorResponse(res, 'Failed to create course', 500, error.message);
+    errorResponse(res, 'Failed to create course', 500, error.message);
   }
-
-  // Si tout s'est bien passé, nous devrions avoir le cours complet avec ses tags
-  successResponse(res, data, 'Course created successfully');
 });
 
 // Obtenir toutes les catégories
@@ -383,7 +426,7 @@ CoursesRoutes.delete('/:courseId/enrolled_users/:userId', authMiddleware, AdminM
       .eq('id', courseId)
       .single();
 
-     // Incrémenter enrolled_count du cours
+    // Incrémenter enrolled_count du cours
     const { error: updateCourseError } = await supabase
       .from('courses')
       .update({ enrolled_count: course.enrolled_count - 1 })
@@ -677,42 +720,50 @@ CoursesRoutes.post('/submissions/:submissionId/assign', authMiddleware, mentorAd
 });
 
 // Route pour mettre à jour un cours
-CoursesRoutes.put('/:courseId', authMiddleware, AdminMiddleware, async (req, res) => {
+CoursesRoutes.put('/:courseId', authMiddleware, AdminMiddleware, upload.single('coverImage'), async (req, res) => {
   const { courseId } = req.params;
   const { title, description, price, category_id, duration, tags } = req.body;
 
   try {
-    // Mise à jour du cours
+    let updateData = {
+      title,
+      description,
+      price,
+      category_id,
+      duration
+    };
+
+    if (req.file) {
+      updateData.cover_image_url = await uploadToCloudinary(req.file.path);
+    }
+    
     const { data: course, error: courseError } = await supabase
       .from('courses')
-      .update({ title, description, price, category_id, duration })
+      .update(updateData)
       .eq('id', courseId)
       .single();
 
     if (courseError) throw courseError;
 
     // Gestion des tags
-    if (tags && Array.isArray(tags)) {
+    if (tags) {
+      const tagArray = JSON.parse(tags);
       // Supprimer les anciens tags
-      const { error: deleteTagError } = await supabase
+      await supabase
         .from('course_tags')
         .delete()
         .eq('course_id', courseId);
 
-      if (deleteTagError) throw deleteTagError;
-
       // Ajouter les nouveaux tags
-      if (tags.length > 0) {
-        const courseTagsInserts = tags.map(tag => ({
+      if (tagArray.length > 0) {
+        const courseTagsInserts = tagArray.map(tag => ({
           course_id: courseId,
           tag_id: tag
         }));
 
-        const { error: insertTagError } = await supabase
+        await supabase
           .from('course_tags')
           .insert(courseTagsInserts);
-
-        if (insertTagError) throw insertTagError;
       }
     }
 

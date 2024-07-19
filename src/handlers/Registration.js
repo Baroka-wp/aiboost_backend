@@ -38,7 +38,7 @@ RegistrationRoutes.post('/register', async (req, res) => {
         username,
         full_name,
       })
-      .select('email, username, full_name, role')
+      .select('id, email, username, full_name, role')
       .single();
 
     if (insertError) {

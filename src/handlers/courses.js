@@ -91,13 +91,15 @@ CoursesRoutes.post('/', authMiddleware, AdminMiddleware, upload.single('coverIma
       coverImageUrl = await uploadToCloudinary(req.file.path);
     }
 
+    const parsedTags = Array.isArray(tags) ? tags : JSON.parse(tags);
+
     const { data, error } = await supabase.rpc('create_course_with_tags', {
       p_title: title,
       p_description: description,
       p_price: price,
       p_category_id: category_id,
       p_duration: duration,
-      p_tags: JSON.parse(tags),
+      p_tags: parsedTags,
       p_cover_image_url: coverImageUrl
     });
 
@@ -736,7 +738,7 @@ CoursesRoutes.put('/:courseId', authMiddleware, AdminMiddleware, upload.single('
     if (req.file) {
       updateData.cover_image_url = await uploadToCloudinary(req.file.path);
     }
-    
+
     const { data: course, error: courseError } = await supabase
       .from('courses')
       .update(updateData)

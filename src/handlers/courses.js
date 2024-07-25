@@ -3,25 +3,217 @@ import { createClient } from '@supabase/supabase-js';
 import { config } from 'dotenv';
 import { successResponse, errorResponse } from '../utils/apiResponses.js';
 import { authMiddleware, AdminMiddleware, mentorAdminMiddleware } from '../utils/utils.js';
+import cloudinary from 'cloudinary';
+import multer from 'multer';
+import path from 'path';
+import fs from 'fs';
+
 
 config();
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
+// Configuration de Cloudinary
+cloudinary.v2.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
+
+// Configuration de multer pour l'upload des fichiers
+const storage = multer.diskStorage({
+  destination: function (req, file, cb) {
+    cb(null, '/tmp/'); // Stockage temporaire
+  },
+  filename: function (req, file, cb) {
+    cb(null, file.fieldname + '-' + Date.now() + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({ storage: storage });
+
 const CoursesRoutes = Router();
+
+// Fonction pour uploader l'image sur Cloudinary
+const uploadToCloudinary = async (filePath) => {
+  try {
+    const result = await cloudinary.v2.uploader.upload(filePath, {
+      folder: 'course_covers'
+    });
+    fs.unlinkSync(filePath); // Supprimer le fichier temporaire
+    return result.secure_url;
+  } catch (error) {
+    console.error('Error uploading to Cloudinary:', error);
+    throw error;
+  }
+};
 
 // Get all courses
 CoursesRoutes.get('/', async (req, res) => {
   try {
     const { data, error } = await supabase
       .from('courses')
-      .select('*');
+      .select(`
+        *,
+        chapters(id, title, content),
+        categories(id, name),
+        tags:course_tags(tags(id, name))
+      `)
+      .order('id', { ascending: true });
+
+    if (error) throw error;
+
+    // Transformation des données pour une meilleure structure
+    const formattedData = data.map(course => ({
+      ...course,
+      category: course.categories,
+      tags: course.tags.map(tag => tag.tags),
+      chapters: course.chapters ? course.chapters.sort((a, b) => a.id - b.id) : []
+    }));
+
+    successResponse(res, formattedData, 'Courses retrieved successfully');
+  } catch (error) {
+    errorResponse(res, 'Failed to retrieve courses', 500, error);
+  }
+});
+
+// Route pour créer un cours
+CoursesRoutes.post('/', authMiddleware, AdminMiddleware, upload.single('coverImage'), async (req, res) => {
+  const { title, description, price, category_id, duration, tags } = req.body;
+
+  if (!title || !description || !category_id || !duration) {
+    return errorResponse(res, 'Missing required fields', 400);
+  }
+
+  try {
+    let coverImageUrl = null;
+    if (req.file) {
+      coverImageUrl = await uploadToCloudinary(req.file.path);
+    }
+
+    const parsedTags = Array.isArray(tags) ? tags : JSON.parse(tags);
+
+    const { data, error } = await supabase.rpc('create_course_with_tags', {
+      p_title: title,
+      p_description: description,
+      p_price: price,
+      p_category_id: category_id,
+      p_duration: duration,
+      p_tags: parsedTags,
+      p_cover_image_url: coverImageUrl
+    });
+
+    if (error) throw error;
+
+    successResponse(res, data, 'Course created successfully');
+  } catch (error) {
+    console.error('Error creating course:', error);
+    errorResponse(res, 'Failed to create course', 500, error.message);
+  }
+});
+
+// Obtenir toutes les catégories
+CoursesRoutes.get('/categories', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('categories')
+      .select('*')
+      .order('name', { ascending: true });
+
+
+
+    if (error) throw error;
+
+    successResponse(res, data, 'Categories retrieved successfully');
+  } catch (error) {
+    errorResponse(res, 'Failed to retrieve categories', 500, error);
+  }
+});
+
+// Create a new category
+CoursesRoutes.post('/categories', authMiddleware, AdminMiddleware, async (req, res) => {
+  const { name } = req.body;
+  try {
+    const { data, error } = await supabase
+      .from('categories')
+      .insert({ name })
+      .single();
+
+    if (error) throw error;
+
+    successResponse(res, data, 'Category created successfully');
+  } catch (error) {
+    errorResponse(res, 'Failed to create category', 500, error);
+  }
+});
+
+// Get all tags
+CoursesRoutes.get('/tags', async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('tags')
+      .select('*')
+      .order('name', { ascending: true });
+
+    if (error) throw error;
+
+    successResponse(res, data, 'Tags retrieved successfully');
+  } catch (error) {
+    errorResponse(res, 'Failed to retrieve tags', 500, error);
+  }
+});
+
+// Create a new tag
+CoursesRoutes.post('/tags', authMiddleware, AdminMiddleware, async (req, res) => {
+  const { name } = req.body;
+  try {
+    const { data, error } = await supabase
+      .from('tags')
+      .insert({ name })
+      .single();
+
+    if (error) throw error;
+
+    successResponse(res, data, 'Tag created successfully');
+  } catch (error) {
+    errorResponse(res, 'Failed to create tag', 500, error);
+  }
+});
+
+
+// Rechercher des cours
+CoursesRoutes.get('/search', async (req, res) => {
+  const { query, category, tags } = req.query;
+
+  try {
+    let coursesQuery = supabase
+      .from('courses')
+      .select(`
+        *,
+        categories(name),
+        tags:course_tags(tags(name))
+      `);
+
+    if (query) {
+      coursesQuery = coursesQuery.or(`title.ilike.%${query}%,description.ilike.%${query}%`);
+    }
+
+    if (category) {
+      coursesQuery = coursesQuery.eq('category_id', category);
+    }
+
+    if (tags) {
+      const tagArray = tags.split(',');
+      coursesQuery = coursesQuery.contains('tags.name', tagArray);
+    }
+
+    const { data, error } = await coursesQuery;
 
     if (error) throw error;
 
     successResponse(res, data, 'Courses retrieved successfully');
   } catch (error) {
-    errorResponse(res, 'Failed to retrieve courses', 500, error);
+    errorResponse(res, 'Failed to search courses', 500, error);
   }
 });
 
@@ -55,56 +247,79 @@ CoursesRoutes.get('/enrolled', authMiddleware, async (req, res) => {
   }
 });
 
+
+// route pour inscrire un user a un cours
 CoursesRoutes.post('/enroll/:courseId', authMiddleware, async (req, res) => {
   const { courseId } = req.params;
-  const userId = req.userId;
+  const { email } = req.body;
+
+  if (!email) {
+    return errorResponse(res, 'Email is required', 400);
+  }
 
   try {
     // Vérifier si le cours existe
     const { data: course, error: courseError } = await supabase
       .from('courses')
-      .select('id')
+      .select('id, enrolled_count')
       .eq('id', courseId)
       .single();
 
     if (courseError || !course) {
-      return errorResponse(res, 'Course not found', 404);
+      throw new Error('Course not found');
     }
 
-    // Récupérer les cours inscrits de l'utilisateur
+    // Rechercher l'utilisateur par email
     const { data: user, error: userError } = await supabase
       .from('users')
-      .select('enrolled_courses')
-      .eq('id', userId)
+      .select('id, enrolled_courses')
+      .eq('email', email)
       .single();
 
-    if (userError) {
-      throw userError;
+    if (userError || !user) {
+      throw new Error('User not found');
     }
 
     // Vérifier si l'utilisateur est déjà inscrit au cours
     const enrolledCourses = user.enrolled_courses || [];
     if (enrolledCourses.includes(parseInt(courseId))) {
-      return errorResponse(res, 'User already enrolled in this course', 400);
+      throw new Error('User already enrolled in this course');
     }
 
-    // Ajouter le cours à la liste des cours inscrits
+    // Ajouter le cours à la liste des cours inscrits de l'utilisateur
     enrolledCourses.push(parseInt(courseId));
 
     // Mettre à jour le profil de l'utilisateur
-    const { data: updatedUser, error: updateError } = await supabase
+    const { error: updateUserError } = await supabase
       .from('users')
       .update({ enrolled_courses: enrolledCourses })
-      .eq('id', userId)
-      .single();
+      .eq('id', user.id);
 
-    if (updateError) {
-      throw updateError;
+    if (updateUserError) {
+      throw updateUserError;
     }
 
-    successResponse(res, updatedUser, 'Enrollment successful');
+    // Incrémenter enrolled_count du cours
+    const { error: updateCourseError } = await supabase
+      .from('courses')
+      .update({ enrolled_count: course.enrolled_count + 1 })
+      .eq('id', courseId);
+
+    if (updateCourseError) {
+      throw updateCourseError;
+    }
+    const { data, error } = await supabase
+      .from('users')
+      .select('id, full_name, email')
+      .contains('enrolled_courses', [courseId]);
+
+    if (error) throw error;
+
+    successResponse(res, data, 'Enrolled users retrieved successfully');
   } catch (error) {
-    errorResponse(res, 'Failed to enroll in the course', 500, error);
+    // En cas d'erreur, annuler la transaction
+    console.log(error)
+    errorResponse(res, error.message, 500, error);
   }
 });
 
@@ -115,7 +330,9 @@ CoursesRoutes.get('/:id', async (req, res) => {
       .from('courses')
       .select(`
         *,
-        chapters:chapters(id, title, content, position)
+        chapters:chapters(id, title, content, position),
+        categories(id, name),
+        tags:course_tags(tags(id, name))
       `)
       .eq('id', req.params.id)
       .single();
@@ -160,6 +377,70 @@ CoursesRoutes.get('/:courseId/chapters/:chapterId', authMiddleware, async (req, 
     successResponse(res, chapter.content, 'Chapter content retrieved successfully');
   } catch (error) {
     errorResponse(res, 'Failed to retrieve chapter content', 500, error);
+  }
+});
+
+
+CoursesRoutes.post('/:courseId/enroll', authMiddleware, AdminMiddleware, async (req, res) => {
+  const { courseId } = req.params;
+  const { userId } = req.body;
+
+  try {
+    const { data, error } = await supabase.rpc('enroll_user_in_course', {
+      p_user_id: userId,
+      p_course_id: parseInt(courseId)
+    });
+
+    if (error) throw error;
+
+    successResponse(res, data, 'User enrolled successfully');
+  } catch (error) {
+    errorResponse(res, 'Failed to enroll user', 500, error);
+  }
+});
+
+// Route pour désinscrire un utilisateur d'un cours
+CoursesRoutes.delete('/:courseId/enrolled_users/:userId', authMiddleware, AdminMiddleware, async (req, res) => {
+  const { courseId, userId } = req.params;
+
+  try {
+    const { data: user, error: userError } = await supabase
+      .from('users')
+      .select('enrolled_courses')
+      .eq('id', userId)
+      .single();
+
+    if (userError) throw userError;
+
+    const updatedEnrolledCourses = user.enrolled_courses.filter(id => id !== parseInt(courseId));
+
+    const { data: users, error } = await supabase
+      .from('users')
+      .update({ enrolled_courses: updatedEnrolledCourses })
+      .eq('id', userId);
+
+    if (error) throw error;
+
+    // Vérifier si le cours existe
+    const { data: course, error: courseError } = await supabase
+      .from('courses')
+      .select('id, enrolled_count')
+      .eq('id', courseId)
+      .single();
+
+    // Incrémenter enrolled_count du cours
+    const { error: updateCourseError } = await supabase
+      .from('courses')
+      .update({ enrolled_count: course.enrolled_count - 1 })
+      .eq('id', courseId);
+
+    if (updateCourseError) {
+      throw updateCourseError;
+    }
+
+    successResponse(res, users, 'User unenrolled successfully');
+  } catch (error) {
+    errorResponse(res, 'Failed to unenroll user', 500, error);
   }
 });
 
@@ -417,7 +698,230 @@ CoursesRoutes.get('/:courseId/chapters/:chapterId/submission-status', authMiddle
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }
-})
+});
+
+
+// Route pour assigner un mentor à une soumission
+CoursesRoutes.post('/submissions/:submissionId/assign', authMiddleware, mentorAdminMiddleware, async (req, res) => {
+  const { submissionId } = req.params;
+  const mentorId = req.userId;
+
+  try {
+    const { data, error } = await supabase
+      .from('submissions')
+      .update({ mentor_id: mentorId })
+      .eq('id', submissionId)
+      .is('mentor_id', null)
+      .single();
+
+    if (error) throw error;
+    successResponse(res, data, 'Submission assigned successfully');
+  } catch (error) {
+    errorResponse(res, 'Failed to assign submission', 500, error);
+  }
+});
+
+// Route pour mettre à jour un cours
+CoursesRoutes.put('/:courseId', authMiddleware, AdminMiddleware, upload.single('coverImage'), async (req, res) => {
+  const { courseId } = req.params;
+  const { title, description, price, category_id, duration, tags } = req.body;
+
+  try {
+    let updateData = {
+      title,
+      description,
+      price,
+      category_id,
+      duration
+    };
+
+    if (req.file) {
+      updateData.cover_image_url = await uploadToCloudinary(req.file.path);
+    }
+
+    const { data: course, error: courseError } = await supabase
+      .from('courses')
+      .update(updateData)
+      .eq('id', courseId)
+      .single();
+
+    if (courseError) throw courseError;
+
+    // Gestion des tags
+    if (tags) {
+      const tagArray = JSON.parse(tags);
+      // Supprimer les anciens tags
+      await supabase
+        .from('course_tags')
+        .delete()
+        .eq('course_id', courseId);
+
+      // Ajouter les nouveaux tags
+      if (tagArray.length > 0) {
+        const courseTagsInserts = tagArray.map(tag => ({
+          course_id: courseId,
+          tag_id: tag
+        }));
+
+        await supabase
+          .from('course_tags')
+          .insert(courseTagsInserts);
+      }
+    }
+
+    // Récupération du cours mis à jour avec ses relations
+    const { data: updatedCourse, error: fetchError } = await supabase
+      .from('courses')
+      .select(`
+        *,
+        categories(id, name),
+        tags:course_tags(tags(id, name))
+      `)
+      .eq('id', courseId)
+      .single();
+
+    if (fetchError) throw fetchError;
+
+    successResponse(res, updatedCourse, 'Course updated successfully');
+  } catch (error) {
+    console.error('Error updating course:', error);
+    errorResponse(res, 'Failed to update course', 500, error.message);
+  }
+});
+
+// Route pour supprimer un cours
+CoursesRoutes.delete('/:courseId', authMiddleware, AdminMiddleware, async (req, res) => {
+  const { courseId } = req.params;
+  try {
+
+
+    try {
+      // Supprimer d'abord les tags associés
+      await supabase
+        .from('course_tags')
+        .delete()
+        .eq('course_id', courseId);
+
+      // Ensuite, supprimer les chapitres associés
+      await supabase
+        .from('chapters')
+        .delete()
+        .eq('course_id', courseId);
+
+      // Enfin, supprimer le cours
+      const { data, error } = await supabase
+        .from('courses')
+        .delete()
+        .eq('id', courseId);
+
+      if (error) throw error;
+      successResponse(res, { id: courseId }, 'Course and its related data deleted successfully');
+    } catch (error) {
+      throw error;
+    }
+  } catch (error) {
+    errorResponse(res, 'Failed to delete course', 500, error);
+  }
+});
+
+// Route pour obtenir les utilisateurs inscrits à un cours
+CoursesRoutes.get('/:courseId/enrolled-users', authMiddleware, AdminMiddleware, async (req, res) => {
+  const { courseId } = req.params;
+  try {
+    const { data, error } = await supabase
+      .from('users')
+      .select('id, full_name, email')
+      .contains('enrolled_courses', [courseId]);
+
+    if (error) throw error;
+
+    successResponse(res, data, 'Enrolled users retrieved successfully');
+  } catch (error) {
+    errorResponse(res, 'Failed to retrieve enrolled users', 500, error);
+  }
+});
+
+
+// Route pour ajouter un chapitre
+CoursesRoutes.post('/:courseId/chapters', authMiddleware, AdminMiddleware, async (req, res) => {
+  const { courseId } = req.params;
+  const { title, content } = req.body;
+  try {
+    // Vérifier si le cours existe
+
+    // Ajouter le chapitre
+    const { data: chapter, error: chapterError } = await supabase
+      .from('chapters')
+      .insert({ course_id: courseId, title, content })
+      .single()
+
+    if (chapterError) throw chapterError;
+
+    const { data: course, error: courseError } = await supabase
+      .from('courses')
+      .select('id')
+      .eq('id', courseId)
+      .single()
+      .select(`
+        chapters(id, title, content)
+      `);
+
+    if (courseError) throw courseError;
+
+    successResponse(res, course?.chapters, 'Chapter created successfully');
+  } catch (error) {
+    errorResponse(res, 'Failed to create chapter', 500, error);
+  }
+});
+
+// Route pour mettre à jour un chapitre
+CoursesRoutes.put('/:courseId/chapters/:chapterId', authMiddleware, AdminMiddleware, async (req, res) => {
+  const { courseId, chapterId } = req.params;
+  const { title, content } = req.body;
+  try {
+    const { data, error } = await supabase
+      .from('chapters')
+      .update({ title, content })
+      .eq('id', chapterId)
+      .eq('course_id', courseId)
+      .single();
+
+    if (error) throw error;
+
+    const { data: course, error: courseError } = await supabase
+      .from('courses')
+      .select('id')
+      .eq('id', courseId)
+      .single()
+      .select(`
+        chapters(id, title, content)
+      `);
+
+    if (courseError) throw courseError;
+
+    successResponse(res, course.chapters, 'Chapter updated successfully');
+  } catch (error) {
+    errorResponse(res, 'Failed to update chapter', 500, error);
+  }
+});
+
+// Route pour supprimer un chapitre
+CoursesRoutes.delete('/:courseId/chapters/:chapterId', authMiddleware, AdminMiddleware, async (req, res) => {
+  const { courseId, chapterId } = req.params;
+  try {
+    const { data, error } = await supabase
+      .from('chapters')
+      .delete()
+      .eq('id', chapterId)
+      .eq('course_id', courseId);
+
+    if (error) throw error;
+
+    successResponse(res, { id: chapterId }, 'Chapter deleted successfully');
+  } catch (error) {
+    errorResponse(res, 'Failed to delete chapter', 500, error);
+  }
+});
 
 
 

@@ -38,7 +38,7 @@ RegistrationRoutes.post('/register', async (req, res) => {
         username,
         full_name,
       })
-      .select('email, username, full_name, role')
+      .select('id, email, username, full_name, role')
       .single();
 
     if (insertError) {
@@ -65,7 +65,7 @@ RegistrationRoutes.post('/login', async (req, res) => {
       .single();
 
 
-    if(!user) return res.status(404).json({message: "User with this email not fund or Not internet"})
+    if (!user) return res.status(404).json({ message: "User with this email not fund or Not internet" })
 
     // Vérifier le mot de passe
     const validPassword = await bcrypt.compare(password, user.password);
@@ -76,6 +76,7 @@ RegistrationRoutes.post('/login', async (req, res) => {
     const token = generateToken(user);
 
     //delete password
+    delete user.password
 
     res.json({ message: "Login successful", token, user });
   } catch (error) {
@@ -91,7 +92,7 @@ RegistrationRoutes.get('/users/:id', authMiddleware, async (req, res) => {
 
     const { data, error } = await supabase
       .from('users')
-      .select('email, username, full_name, role')
+      .select('*')
       .eq('id', req.params.id)
       .single();
 
@@ -110,21 +111,29 @@ RegistrationRoutes.get('/users/:id', authMiddleware, async (req, res) => {
 });
 
 // Mettre à jour le profil d'un utilisateur
-RegistrationRoutes.put('/users/:id', async (req, res) => {
-  const { username, full_name } = req.body;
+RegistrationRoutes.put('/users/:userId', authMiddleware, async (req, res) => {
+  const { userId } = req.params;
+  const { email, full_name, username, role, password } = req.body;
 
   try {
+    let updateData = { email, full_name, role, username };
+
+    if (password) {
+      const hashedPassword = await bcrypt.hash(password, 10);
+      updateData.password = hashedPassword;
+    }
+
     const { data, error } = await supabase
       .from('users')
-      .update({ username, full_name })
-      .eq('id', req.params.id)
+      .update(updateData)
+      .eq('id', userId)
       .single();
 
     if (error) throw error;
 
-    res.json(data);
+    successResponse(res, data, 'User updated successfully');
   } catch (error) {
-    res.status(400).json({ error: error.message });
+    errorResponse(res, 'Failed to update user', 500, error);
   }
 });
 

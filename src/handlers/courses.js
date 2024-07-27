@@ -7,10 +7,13 @@ import cloudinary from 'cloudinary';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
-
+import Mailjet from 'node-mailjet';
+import { emailHTMLTemlate, AdminEmailContent } from '../utils/mailHTML.js';
+import { SendEmail } from '../utils/utils.js';
 
 config();
 
+// config superbase
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
 // Configuration de Cloudinary
@@ -23,13 +26,12 @@ cloudinary.v2.config({
 // Configuration de multer pour l'upload des fichiers
 const storage = multer.diskStorage({
   destination: function (req, file, cb) {
-    cb(null, '/tmp/'); // Stockage temporaire
+    cb(null, '/tmp/');
   },
   filename: function (req, file, cb) {
     cb(null, file.fieldname + '-' + Date.now() + path.extname(file.originalname));
   }
 });
-
 const upload = multer({ storage: storage });
 
 const CoursesRoutes = Router();
@@ -261,7 +263,9 @@ CoursesRoutes.post('/enroll/:courseId', authMiddleware, async (req, res) => {
     // Vérifier si le cours existe
     const { data: course, error: courseError } = await supabase
       .from('courses')
-      .select('id, enrolled_count')
+      .select(`
+        id, title, description, enrolled_count,
+        chapters(id, title, content)`)
       .eq('id', courseId)
       .single();
 
@@ -272,7 +276,7 @@ CoursesRoutes.post('/enroll/:courseId', authMiddleware, async (req, res) => {
     // Rechercher l'utilisateur par email
     const { data: user, error: userError } = await supabase
       .from('users')
-      .select('id, enrolled_courses')
+      .select('id, full_name, enrolled_courses')
       .eq('email', email)
       .single();
 
@@ -282,12 +286,12 @@ CoursesRoutes.post('/enroll/:courseId', authMiddleware, async (req, res) => {
 
     // Vérifier si l'utilisateur est déjà inscrit au cours
     const enrolledCourses = user.enrolled_courses || [];
-    if (enrolledCourses.includes(parseInt(courseId))) {
+    if (enrolledCourses.includes(Number(courseId))) {
       throw new Error('User already enrolled in this course');
     }
 
     // Ajouter le cours à la liste des cours inscrits de l'utilisateur
-    enrolledCourses.push(parseInt(courseId));
+    enrolledCourses.push(Number(courseId));
 
     // Mettre à jour le profil de l'utilisateur
     const { error: updateUserError } = await supabase
@@ -308,6 +312,20 @@ CoursesRoutes.post('/enroll/:courseId', authMiddleware, async (req, res) => {
     if (updateCourseError) {
       throw updateCourseError;
     }
+
+    const REACT_APP_URL     = process.env.REACT_APP_URL;
+    const emailHtml         = emailHTMLTemlate({ course, courseId, user, REACT_APP_URL })
+    const adminEmailHTML    = AdminEmailContent({course, user, email})
+    const UserEmail         = email;
+    const UserFullName      = user.full_name;
+    const MailSubject       = `Bienvenue au cours : ${course.title}`
+    const adminMailSubject  = `Nouvelle inscription : ${course.title}`
+    const adminMail         = "birotori@gmail.com";
+    const AdminName         = "Baroka"
+
+    await SendEmail({ mail: UserEmail, name: UserFullName, subject: MailSubject, HTMLPart: emailHtml })
+    await SendEmail({ mail: adminMail, name: AdminName, subject: adminMailSubject, HTMLPart: adminEmailHTML })
+
     const { data, error } = await supabase
       .from('users')
       .select('id, full_name, email')

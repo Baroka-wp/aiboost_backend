@@ -10,7 +10,18 @@ config();
 
 const app = express();
 
-app.use(cors());
+// Configuration CORS
+const corsOptions = {
+  origin: ['https://bootcamp.africasamurai.com', 'http://localhost:5173'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true,
+  optionsSuccessStatus: 204
+};
+
+// Appliquer CORS à toutes les routes
+app.use(cors(corsOptions));
+
 app.use(express.json());
 
 app.use('/courses', CoursesRoutes);

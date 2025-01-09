@@ -13,6 +13,5 @@
         }
     ],
     "buildCommand": "prisma generate && prisma migrate deploy",
-    "installCommand": "npm install",
-    "framework": "node"
+    "installCommand": "npm install"
 }

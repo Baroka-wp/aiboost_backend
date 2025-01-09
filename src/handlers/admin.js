@@ -1,5 +1,5 @@
 import express, { Router } from 'express';
-import { createClient } from '@supabase/supabase-js';
+import { PrismaClient } from '@prisma/client';
 import { config } from 'dotenv';
 import bcrypt from 'bcryptjs';
 import { generateToken } from '../utils/utils.js';
@@ -8,108 +8,130 @@ import { authMiddleware, AdminMiddleware, mentorAdminMiddleware } from '../utils
 
 config();
 
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
-
+const prisma = new PrismaClient();
 const AdminRoutes = Router();
 
-
+// Get all users
 AdminRoutes.get('/users', authMiddleware, AdminMiddleware, async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from('users')
-      .select('id, email, username, full_name, role')
-      .order('id', { ascending: true });
+    const users = await prisma.user.findMany({
+      select: {
+        id: true,
+        email: true,
+        username: true,
+        full_name: true,
+        role: true
+      },
+      orderBy: {
+        id: 'asc'
+      }
+    });
 
-    if (error) throw error;
-
-    successResponse(res, data, 'Users retrieved successfully');
+    successResponse(res, users, 'Users retrieved successfully');
   } catch (error) {
     errorResponse(res, 'Failed to retrieve users', 500, error);
   }
 });
 
-
+// Create user
 AdminRoutes.post('/users', authMiddleware, AdminMiddleware, async (req, res) => {
   const { email, password, username, full_name, role } = req.body;
 
   try {
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    const { data: existingUser } = await supabase
-      .from('users')
-      .select('email')
-      .eq('email', email)
-      .single();
+    const existingUser = await prisma.user.findUnique({
+      where: { email }
+    });
 
     if (existingUser) {
       return errorResponse(res, 'User with this email already exists', 400);
     }
 
-    const { data, error: insertError } = await supabase
-      .from('users')
-      .insert({
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const newUser = await prisma.user.create({
+      data: {
         email,
         password: hashedPassword,
         username,
         full_name,
         role
-      })
-      .select('email, username, full_name, role')
-      .single();
+      },
+      select: {
+        email: true,
+        username: true,
+        full_name: true,
+        role: true
+      }
+    });
 
-    if (insertError) {
-      console.error('Insert error:', insertError);
-      throw new Error(insertError.message);
-    }
-
-    successResponse(res, { user: data }, "User registered successfully", 201);
+    successResponse(res, { user: newUser }, "User registered successfully", 201);
   } catch (error) {
     errorResponse(res, 'Failed to create user', 500, error);
   }
 });
 
+// Get mentor submissions
 AdminRoutes.get('/mentor/submissions', authMiddleware, mentorAdminMiddleware, async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from('submissions')
-      .select(`
-        *,
-        users(full_name, email),
-        courses(title),
-        chapters(title, content)
-      `)
-      .in('status', ['pending', 'needs_revision'])
-      .order('created_at', { ascending: false });
+    const submissions = await prisma.submission.findMany({
+      where: {
+        status: {
+          in: ['PENDING', 'NEEDS_REVISION']
+        }
+      },
+      include: {
+        user: {
+          select: {
+            full_name: true,
+            email: true
+          }
+        },
+        course: {
+          select: {
+            title: true
+          }
+        },
+        chapter: {
+          select: {
+            title: true,
+            content: true
+          }
+        }
+      },
+      orderBy: {
+        created_at: 'desc'
+      }
+    });
 
-    if (error) throw error;
-
-    successResponse(res, data, 'Submissions retrieved successfully');
+    successResponse(res, submissions, 'Submissions retrieved successfully');
   } catch (error) {
     errorResponse(res, 'Failed to retrieve submissions', 500, error);
   }
 });
 
-
+// Update submission
 AdminRoutes.put('/mentor/submissions/:submissionId', authMiddleware, mentorAdminMiddleware, async (req, res) => {
   const { submissionId } = req.params;
   const { status, mentor_comment } = req.body;
   
   try {
-    const { data, error } = await supabase
-      .from('submissions')
-      .update({ status, mentor_comment })
-      .eq('id', submissionId)
-      .single();
+    const updatedSubmission = await prisma.submission.update({
+      where: {
+        id: parseInt(submissionId)
+      },
+      data: {
+        status,
+        mentor_comment
+      }
+    });
     
-    if (error) throw error;
-
-    successResponse(res, data, 'Submission updated successfully');
+    successResponse(res, updatedSubmission, 'Submission updated successfully');
   } catch (error) {
     errorResponse(res, 'Failed to update submission', 500, error);
   }
 });
 
-// Mise à jour d'un utilisateur
+// Update user
 AdminRoutes.put('/users/:userId', authMiddleware, AdminMiddleware, async (req, res) => {
   const { userId } = req.params;
   const { email, full_name, username, role, password } = req.body;
@@ -118,89 +140,89 @@ AdminRoutes.put('/users/:userId', authMiddleware, AdminMiddleware, async (req, r
     let updateData = { email, full_name, role, username };
 
     if (password) {
-      const hashedPassword = await bcrypt.hash(password, 10);
-      updateData.password = hashedPassword;
+      updateData.password = await bcrypt.hash(password, 10);
     }
 
-    const { data, error } = await supabase
-      .from('users')
-      .update(updateData)
-      .eq('id', userId)
-      .single();
+    const updatedUser = await prisma.user.update({
+      where: {
+        id: parseInt(userId)
+      },
+      data: updateData,
+      select: {
+        id: true,
+        email: true,
+        username: true,
+        full_name: true,
+        role: true
+      }
+    });
 
-    if (error) throw error;
-
-    successResponse(res, data, 'User updated successfully');
+    successResponse(res, updatedUser, 'User updated successfully');
   } catch (error) {
     errorResponse(res, 'Failed to update user', 500, error);
   }
 });
 
-// Suppression d'un utilisateur
+// Delete user
 AdminRoutes.delete('/users/:userId', authMiddleware, AdminMiddleware, async (req, res) => {
   const { userId } = req.params;
 
   try {
-    const { data, error } = await supabase
-      .from('users')
-      .delete()
-      .eq('id', userId);
+    const deletedUser = await prisma.user.delete({
+      where: {
+        id: parseInt(userId)
+      }
+    });
 
-    if (error) throw error;
-
-    successResponse(res, data, 'User deleted successfully');
+    successResponse(res, deletedUser, 'User deleted successfully');
   } catch (error) {
     errorResponse(res, 'Failed to delete user', 500, error);
   }
 });
 
-// Suspension/réactivation d'un utilisateur
+// Suspend/reactivate user
 AdminRoutes.put('/users/:userId/suspend', authMiddleware, AdminMiddleware, async (req, res) => {
   const { userId } = req.params;
   const { is_suspended } = req.body;
 
   try {
-    const { data, error } = await supabase
-      .from('users')
-      .update({ is_suspended })
-      .eq('id', userId)
-      .single();
+    const updatedUser = await prisma.user.update({
+      where: {
+        id: parseInt(userId)
+      },
+      data: {
+        is_suspended
+      }
+    });
 
-    if (error) throw error;
-
-    successResponse(res, data, `User ${is_suspended ? 'suspended' : 'reactivated'} successfully`);
+    successResponse(res, updatedUser, `User ${is_suspended ? 'suspended' : 'reactivated'} successfully`);
   } catch (error) {
     errorResponse(res, 'Failed to update user suspension status', 500, error);
   }
 });
 
-// Inscription d'un utilisateur à un cours
+// Enroll user in course
 AdminRoutes.post('/users/:userId/enroll', authMiddleware, AdminMiddleware, async (req, res) => {
   const { userId } = req.params;
   const { course_id } = req.body;
 
   try {
-    const { data: user, error: userError } = await supabase
-      .from('users')
-      .select('enrolled_courses')
-      .eq('id', userId)
-      .single();
-
-    if (userError) throw userError;
+    const user = await prisma.user.findUnique({
+      where: { id: parseInt(userId) }
+    });
 
     const enrolledCourses = user.enrolled_courses || [];
     if (!enrolledCourses.includes(course_id)) {
-      enrolledCourses.push(course_id);
+      const updatedUser = await prisma.user.update({
+        where: { id: parseInt(userId) },
+        data: {
+          enrolled_courses: {
+            push: course_id
+          }
+        }
+      });
 
-      const { data, error } = await supabase
-        .from('users')
-        .update({ enrolled_courses: enrolledCourses })
-        .eq('id', userId)
-        .single();
-
-      if (error) throw error;
-
-      successResponse(res, data, 'User enrolled in course successfully');
+      successResponse(res, updatedUser, 'User enrolled in course successfully');
     } else {
       successResponse(res, null, 'User already enrolled in this course');
     }
@@ -209,47 +231,33 @@ AdminRoutes.post('/users/:userId/enroll', authMiddleware, AdminMiddleware, async
   }
 });
 
-// Obtention de la progression d'un utilisateur
+// Get user progress
 AdminRoutes.get('/users/:userId/progress', authMiddleware, AdminMiddleware, async (req, res) => {
   const { userId } = req.params;
 
   try {
-    const { data: enrolledCourses, error: enrolledError } = await supabase
-      .from('users')
-      .select('enrolled_courses')
-      .eq('id', userId)
-      .single();
-
-    
-    if (enrolledError) throw enrolledError;
-
-    const courseIds = enrolledCourses.enrolled_courses || [];
-
-    const { data: progress, error: progressError } = await supabase
-      .from('user_progress')
-      .select('*')
-      .eq('user_id', userId)
-      .in('course_id', courseIds);
-
-    if (progressError) throw progressError;
-
-    const { data: courses, error: coursesError } = await supabase
-      .from('courses')
-      .select('id, title, chapters(count)')
-      .in('id', courseIds);
-
-    if (coursesError) throw coursesError;
-
-    const progressWithDetails = progress.map(p => {
-      const course = courses.find(c => c.id === p.course_id);
-      return {
-        course_id: p.course_id,
-        course_title: course.title,
-        total_chapters: course.chapters[0].count,
-        completed_chapters: p.completed_chapters,
-        percentage: Math.round((p.completed_chapters.length / course.chapters[0].count) * 100)
-      };
+    const user = await prisma.user.findUnique({
+      where: { id: parseInt(userId) },
+      include: {
+        progress: {
+          include: {
+            course: {
+              include: {
+                chapters: true
+              }
+            }
+          }
+        }
+      }
     });
+
+    const progressWithDetails = user.progress.map(p => ({
+      course_id: p.course_id,
+      course_title: p.course.title,
+      total_chapters: p.course.chapters.length,
+      completed_chapters: p.completed_chapters,
+      percentage: Math.round((p.completed_chapters.length / p.course.chapters.length) * 100)
+    }));
 
     successResponse(res, progressWithDetails, 'User progress retrieved successfully');
   } catch (error) {
@@ -257,91 +265,110 @@ AdminRoutes.get('/users/:userId/progress', authMiddleware, AdminMiddleware, asyn
   }
 });
 
-// Récupérer tous les mentors avec pagination
+// Get mentors with pagination
 AdminRoutes.get('/mentors', authMiddleware, AdminMiddleware, async (req, res) => {
   const { page = 1, limit = 10 } = req.query;
-  const offset = (page - 1) * limit;
+  const skip = (parseInt(page) - 1) * parseInt(limit);
 
   try {
-    const { data, error, count } = await supabase
-      .from('users')
-      .select('id, email, username, full_name, role, is_suspended', { count: 'exact' })
-      .eq('role', 'mentor')
-      .range(offset, offset + limit - 1)
-      .order('id', { ascending: true });
+    const [mentors, count] = await Promise.all([
+      prisma.user.findMany({
+        where: {
+          role: 'MENTOR'
+        },
+        select: {
+          id: true,
+          email: true,
+          username: true,
+          full_name: true,
+          role: true,
+          is_suspended: true
+        },
+        skip,
+        take: parseInt(limit),
+        orderBy: {
+          id: 'asc'
+        }
+      }),
+      prisma.user.count({
+        where: {
+          role: 'MENTOR'
+        }
+      })
+    ]);
 
-    if (error) throw error;
+    const totalPages = Math.ceil(count / parseInt(limit));
 
-    const totalPages = Math.ceil(count / limit);
-
-    successResponse(res, { mentors: data, totalPages, currentPage: page }, 'Mentors retrieved successfully');
+    successResponse(
+      res, 
+      { mentors, totalPages, currentPage: parseInt(page) }, 
+      'Mentors retrieved successfully'
+    );
   } catch (error) {
     errorResponse(res, 'Failed to retrieve mentors', 500, error);
   }
 });
 
-// Récupérer tous les étudiants avec pagination
+// Get students with pagination and course progress
 AdminRoutes.get('/students', authMiddleware, AdminMiddleware, async (req, res) => {
   const { page = 1, limit = 10 } = req.query;
-  const offset = (page - 1) * limit;
+  const skip = (parseInt(page) - 1) * parseInt(limit);
 
   try {
-    const { data, error, count } = await supabase
-      .from('users')
-      .select('id, email, username, full_name, role, is_suspended, enrolled_courses', { count: 'exact' })
-      .eq('role', 'student')
-      .range(offset, offset + limit - 1)
-      .order('id', { ascending: true });
+    const [students, count] = await Promise.all([
+      prisma.user.findMany({
+        where: {
+          role: 'USER'
+        },
+        include: {
+          progress: {
+            include: {
+              course: {
+                select: {
+                  id: true,
+                  title: true,
+                  chapters: {
+                    select: {
+                      id: true
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        skip,
+        take: parseInt(limit),
+        orderBy: {
+          id: 'asc'
+        }
+      }),
+      prisma.user.count({
+        where: {
+          role: 'USER'
+        }
+      })
+    ]);
 
-    if (error) throw error;
-
-    const totalPages = Math.ceil(count / limit);
-
-    // Récupérer les informations des cours pour chaque étudiant
-    const studentsWithCourseInfo = await Promise.all(data.map(async (student) => {
-      if (student.enrolled_courses && student.enrolled_courses.length > 0) {
-        const { data: coursesData, error: coursesError } = await supabase
-          .from('courses')
-          .select('id, title')
-          .in('id', student.enrolled_courses);
-
-        if (coursesError) throw coursesError;
-
-        // Récupérer la progression pour chaque cours
-        const progressPromises = student.enrolled_courses.map(async (courseId) => {
-          const { data: progressData, error: progressError } = await supabase
-            .from('user_progress')
-            .select('completed_chapters')
-            .eq('user_id', student.id)
-            .eq('course_id', courseId)
-            .single();
-
-          if (progressError && progressError.code !== 'PGRST116') throw progressError;
-
-          return {
-            courseId,
-            progress: progressData ? (progressData.completed_chapters.length / coursesData.find(c => c.id === courseId).chapters_count) * 100 : 0
-          };
-        });
-
-        const progressData = await Promise.all(progressPromises);
-
-        return {
-          ...student,
-          courses: coursesData.map(course => ({
-            ...course,
-            progress: progressData.find(p => p.courseId === course.id).progress
-          }))
-        };
-      }
-      return student;
+    const studentsWithCourseInfo = students.map(student => ({
+      ...student,
+      courses: student.progress.map(p => ({
+        id: p.course.id,
+        title: p.course.title,
+        progress: Math.round((p.completed_chapters.length / p.course.chapters.length) * 100)
+      }))
     }));
 
-    successResponse(res, { students: studentsWithCourseInfo, totalPages, currentPage: page }, 'Students retrieved successfully');
+    const totalPages = Math.ceil(count / parseInt(limit));
+
+    successResponse(
+      res,
+      { students: studentsWithCourseInfo, totalPages, currentPage: parseInt(page) },
+      'Students retrieved successfully'
+    );
   } catch (error) {
     errorResponse(res, 'Failed to retrieve students', 500, error);
   }
 });
-
 
 export default AdminRoutes;

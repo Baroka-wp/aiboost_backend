@@ -5,6 +5,7 @@ import CoursesRoutes from './src/handlers/courses.js';
 import RegistrationRoutes from './src/handlers/Registration.js';
 import { errorHandler } from './src/middleware/errorHandler.js';
 import AdminRoutes from './src/handlers/admin.js';
+import SurveyRoutes from './src/handlers/survey.js';
 
 config();
 
@@ -27,6 +28,7 @@ app.use(express.json());
 app.use('/courses', CoursesRoutes);
 app.use('/auth', RegistrationRoutes);
 app.use('/admin', AdminRoutes);
+app.use('/survey', SurveyRoutes);
 
 // Error handling middleware
 app.use(errorHandler);

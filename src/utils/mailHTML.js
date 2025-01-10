@@ -101,3 +101,63 @@ export const AdminEmailContent = ({user, course, email}) => {
   `;
 
 };
+
+export const generateSurveyEmailHTML = ({ email, learning_goal, motivation, skill_level, usage_goal, value_range }) => {
+  return `
+    <html>
+      <head>
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          h1 { color: #FF8C00; }
+          table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+          th, td { border: 1px solid #ddd; padding: 12px; text-align: left; }
+          th { background-color: #f8f9fa; color: #FF8C00; }
+          .footer { margin-top: 20px; font-size: 12px; color: #888; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <h1>Nouveau Sondage de Formation</h1>
+          <p>Un nouveau sondage a été soumis sur la plateforme AI Boost.</p>
+          
+          <table>
+            <tr>
+              <th>Information</th>
+              <th>Réponse</th>
+            </tr>
+            <tr>
+              <td>Email</td>
+              <td>${email}</td>
+            </tr>
+            <tr>
+              <td>Domaine d'intérêt</td>
+              <td>${learning_goal}</td>
+            </tr>
+            <tr>
+              <td>Motivation</td>
+              <td>${motivation}</td>
+            </tr>
+            <tr>
+              <td>Niveau actuel</td>
+              <td>${skill_level}</td>
+            </tr>
+            <tr>
+              <td>Objectif d'utilisation</td>
+              <td>${usage_goal}</td>
+            </tr>
+            <tr>
+              <td>Besoin d'un mentor</td>
+              <td>${value_range}</td>
+            </tr>
+          </table>
+
+          <div class="footer">
+            <p>Ce sondage a été soumis le ${new Date().toLocaleString()}</p>
+            <p>Plateforme AI Boost - Système de Formation</p>
+          </div>
+        </div>
+      </body>
+    </html>
+  `;
+};

@@ -28,6 +28,7 @@ model User {
   submissions      Submission[]
   progress         UserProgress[]
   mentored_submissions Submission[] @relation("mentor_submissions")
+  surveys          Survey[]
 }
 
 enum UserRole {
@@ -128,4 +129,18 @@ enum SubmissionStatus {
   REVIEWING
   ACCEPTED
   REJECTED
+}
+
+model Survey {
+  id            Int      @id @default(autoincrement())
+  email         String
+  user_id       Int?
+  learning_goal String
+  motivation    String
+  skill_level   String
+  usage_goal    String
+  value_range   String
+  user          User?    @relation(fields: [user_id], references: [id])
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
 }

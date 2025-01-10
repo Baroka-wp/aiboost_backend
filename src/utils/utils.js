@@ -40,7 +40,7 @@ export const mentorAdminMiddleware = (req, res, next) => {
     if (err) {
       return errorResponse(res, 'Failed to authenticate token', 401);
     }
-    if (decoded.role === 'mentor' || decoded.role === 'admin') {
+    if (decoded.role === 'MENTOR' || decoded.role === 'ADMIN') {
       next();
     } else {
       return errorResponse(res, 'Access denied. Mentor or Admin role required.', 403);
@@ -55,7 +55,7 @@ export const AdminMiddleware = (req, res, next) => {
     if (err) {
       return errorResponse(res, 'Failed to authenticate token', 401);
     }
-    if (decoded.role === 'admin') {
+    if (decoded.role === 'ADMIN') {
       next();
     } else {
       return errorResponse(res, 'Access denied. Admin role required.', 403);

@@ -1,141 +1,177 @@
 import express, { Router } from 'express';
-import { createClient } from '@supabase/supabase-js';
+import { PrismaClient } from '@prisma/client';
 import { config } from 'dotenv';
 import bcrypt from 'bcryptjs';
 import { generateToken } from '../utils/utils.js';
 import { successResponse, errorResponse } from '../utils/apiResponses.js';
 import { authMiddleware } from '../utils/utils.js';
 
-
 config();
 
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
-
-
+const prisma = new PrismaClient();
 const RegistrationRoutes = Router();
 
+// Register new user
 RegistrationRoutes.post('/register', async (req, res) => {
   const { email, password, username, full_name } = req.body;
 
   try {
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    const { data: existingUser } = await supabase
-      .from('users')
-      .select('email')
-      .eq('email', email)
-      .single();
+    // Vérifier si l'utilisateur existe déjà
+    const existingUser = await prisma.user.findUnique({
+      where: { email }
+    });
 
     if (existingUser) {
       return errorResponse(res, 'User with this email already exists', 400);
     }
 
-    const { data, error: insertError } = await supabase
-      .from('users')
-      .insert({
+    // Hasher le mot de passe
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Créer le nouvel utilisateur
+    const newUser = await prisma.user.create({
+      data: {
         email,
         password: hashedPassword,
         username,
         full_name,
-      })
-      .select('id, email, username, full_name, role')
-      .single();
+        role: 'USER' // Valeur par défaut du enum UserRole
+      },
+      select: {
+        id: true,
+        email: true,
+        username: true,
+        full_name: true,
+        role: true
+      }
+    });
 
-    if (insertError) {
-      console.error('Insert error:', insertError);
-      throw new Error(insertError.message);
-    }
+    // Générer le token
+    const token = generateToken(newUser);
 
-    const token = generateToken(data);
-
-    successResponse(res, { token, user: data }, "User registered successfully", 201);
+    successResponse(res, { token, user: newUser }, "User registered successfully", 201);
   } catch (error) {
+    console.error('Registration error:', error);
     errorResponse(res, 'Registration failed', 400, error);
   }
 });
 
+// Login user
 RegistrationRoutes.post('/login', async (req, res) => {
   const { email, password } = req.body;
 
   try {
-    const { data: user, error } = await supabase
-      .from('users')
-      .select('*')
-      .eq('email', email)
-      .single();
+    const user = await prisma.user.findUnique({
+      where: { email }
+    });
 
-
-    if (!user) return res.status(404).json({ message: "User with this email not fund or Not internet" })
+    if (!user) {
+      return res.status(404).json({ message: "User with this email not found" });
+    }
 
     // Vérifier le mot de passe
     const validPassword = await bcrypt.compare(password, user.password);
     if (!validPassword) {
       return res.status(400).json({ error: 'Invalid email or password' });
     }
-    // Générer un jeton JWT
-    const token = generateToken(user);
 
-    //delete password
-    delete user.password
+    // Créer une version de l'utilisateur sans le mot de passe
+    const userWithoutPassword = {
+      id: user.id,
+      email: user.email,
+      username: user.username,
+      full_name: user.full_name,
+      role: user.role,
+      enrolled_courses: user.enrolled_courses
+    };
 
-    res.json({ message: "Login successful", token, user });
+    // Générer un token JWT
+    const token = generateToken(userWithoutPassword);
+
+    res.json({ message: "Login successful", token, user: userWithoutPassword });
   } catch (error) {
     res.status(400).json({ error: error.message });
   }
 });
 
+// Get user profile
 RegistrationRoutes.get('/users/:id', authMiddleware, async (req, res) => {
   try {
-    if (req.params.id !== req.userId) {
+    if (req.params.id !== req.userId.toString()) {
       return errorResponse(res, 'Unauthorized access', 403);
     }
 
-    const { data, error } = await supabase
-      .from('users')
-      .select('*')
-      .eq('id', req.params.id)
-      .single();
+    const user = await prisma.user.findUnique({
+      where: { id: parseInt(req.params.id) },
+      select: {
+        id: true,
+        email: true,
+        username: true,
+        full_name: true,
+        role: true,
+        enrolled_courses: true,
+        created_at: true,
+        updated_at: true
+      }
+    });
 
-    if (error) throw error;
-
-    if (!data) {
+    if (!user) {
       return errorResponse(res, 'User not found', 404);
     }
 
-    delete data.password;
-
-    successResponse(res, data, 'User profile retrieved successfully');
+    successResponse(res, user, 'User profile retrieved successfully');
   } catch (error) {
     errorResponse(res, 'Failed to retrieve user profile', 400, error);
   }
 });
 
-// Mettre à jour le profil d'un utilisateur
+// Update user profile
 RegistrationRoutes.put('/users/:userId', authMiddleware, async (req, res) => {
   const { userId } = req.params;
   const { email, full_name, username, role, password } = req.body;
 
   try {
-    let updateData = { email, full_name, role, username };
+    // Préparer les données de mise à jour
+    let updateData = {
+      email,
+      full_name,
+      username
+    };
 
+    // Ajouter le rôle si fourni (et vérifie qu'il correspond à l'enum UserRole)
+    if (role) {
+      updateData.role = role;
+    }
+
+    // Ajouter le mot de passe s'il est fourni
     if (password) {
       const hashedPassword = await bcrypt.hash(password, 10);
       updateData.password = hashedPassword;
     }
 
-    const { data, error } = await supabase
-      .from('users')
-      .update(updateData)
-      .eq('id', userId)
-      .single();
+    // Mettre à jour l'utilisateur
+    const updatedUser = await prisma.user.update({
+      where: { id: parseInt(userId) },
+      data: updateData,
+      select: {
+        id: true,
+        email: true,
+        username: true,
+        full_name: true,
+        role: true,
+        created_at: true,
+        updated_at: true
+      }
+    });
 
-    if (error) throw error;
-
-    successResponse(res, data, 'User updated successfully');
+    successResponse(res, updatedUser, 'User updated successfully');
   } catch (error) {
-    errorResponse(res, 'Failed to update user', 500, error);
+    if (error.code === 'P2002') {
+      errorResponse(res, 'Email or username already exists', 400, error);
+    } else {
+      errorResponse(res, 'Failed to update user', 500, error);
+    }
   }
 });
 
-
-export default RegistrationRoutes
+export default RegistrationRoutes;

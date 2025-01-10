@@ -1,0 +1,146 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id               Int           @id @default(autoincrement())
+  email            String        @unique
+  password         String        // Ajout du champ password
+  username         String        @unique
+  full_name        String
+  role             UserRole      @default(USER)
+  is_suspended     Boolean       @default(false)
+  enrolled_courses Int[]         // Array of course IDs
+  created_at       DateTime      @default(now())
+  updated_at       DateTime      @updatedAt
+  submissions      Submission[]
+  progress         UserProgress[]
+  mentored_submissions Submission[] @relation("mentor_submissions")
+  surveys          Survey[]
+}
+
+enum UserRole {
+  USER
+  MENTOR
+  ADMIN
+}
+
+model Course {
+  id             Int           @id @default(autoincrement())
+  title          String
+  description    String
+  price          Float?
+  duration       String
+  cover_image_url String?
+  enrolled_count Int           @default(0)
+  category_id    Int
+  category       Category      @relation(fields: [category_id], references: [id])
+  chapters       Chapter[]
+  course_tags    CourseTag[]
+  created_at     DateTime      @default(now())
+  updated_at     DateTime      @updatedAt
+  submissions    Submission[]
+  progress       UserProgress[]
+}
+
+model Category {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  courses   Course[]
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+}
+
+model Tag {
+  id         Int         @id @default(autoincrement())
+  name       String      @unique
+  course_tags CourseTag[]
+  created_at  DateTime    @default(now())
+  updated_at  DateTime    @updatedAt
+}
+
+model CourseTag {
+  id        Int      @id @default(autoincrement())
+  course_id Int
+  tag_id    Int
+  course    Course   @relation(fields: [course_id], references: [id], onDelete: Cascade)
+  tag       Tag      @relation(fields: [tag_id], references: [id])
+  created_at DateTime @default(now())
+  updated_at DateTime @updatedAt
+
+  @@unique([course_id, tag_id])
+}
+
+model Chapter {
+  id         Int          @id @default(autoincrement())
+  title      String
+  content    String       @db.Text
+  position   Int?
+  course_id  Int
+  course     Course       @relation(fields: [course_id], references: [id], onDelete: Cascade)
+  created_at DateTime     @default(now())
+  updated_at DateTime     @updatedAt
+  submissions Submission[]
+}
+
+model UserProgress {
+  id                Int      @id @default(autoincrement())
+  user_id          Int
+  course_id        Int
+  current_chapter_id Int
+  completed_chapters Int[]    
+  user             User     @relation(fields: [user_id], references: [id])
+  course           Course   @relation(fields: [course_id], references: [id])
+  created_at       DateTime @default(now())
+  updated_at       DateTime @updatedAt
+}
+
+model Submission {
+  id           Int             @id @default(autoincrement())
+  user_id      Int
+  course_id    Int
+  chapter_id   Int
+  mentor_id    Int?
+  link         String
+  status       SubmissionStatus @default(PENDING)
+  mentor_comment String?
+  user         User            @relation(fields: [user_id], references: [id])
+  mentor       User?           @relation("mentor_submissions", fields: [mentor_id], references: [id])
+  course       Course          @relation(fields: [course_id], references: [id])
+  chapter      Chapter         @relation(fields: [chapter_id], references: [id])
+  created_at   DateTime        @default(now())
+  updated_at   DateTime        @updatedAt
+}
+
+enum SubmissionStatus {
+  PENDING
+  REVIEWING
+  ACCEPTED
+  REJECTED
+}
+
+model Survey {
+  id            Int      @id @default(autoincrement())
+  email         String
+  user_id       Int?
+  learning_goal String
+  motivation    String
+  skill_level   String
+  usage_goal    String
+  value_range   String
+  user          User?    @relation(fields: [user_id], references: [id])
+  created_at    DateTime @default(now())
+  updated_at    DateTime @updatedAt
+}

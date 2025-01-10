@@ -11,5 +11,7 @@
             "src": "/(.*)",
             "dest": "server.js"
         }
-    ]
+    ],
+    "buildCommand": "prisma generate && prisma migrate deploy",
+    "installCommand": "npm install"
 }
